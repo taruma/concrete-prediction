@@ -1,0 +1,30 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code');
+        
+code {
+  font-family: 'Fira Code', monospace;
+}
+
+
+.scroll-100 {
+  max-height: 400px;
+  overflow-y: auto;
+  background-color: inherit;
+}
+
+p {
+  text-align: justify;
+}
+
+p.caption {
+  text-align: center;
+  font-family: 'Fira Code', monospace;
+  font-style: bold;
+}
+
+.figure-caption {
+  text-align: center;
+}
+
+.table-caption p {
+  text-align: center;
+}
