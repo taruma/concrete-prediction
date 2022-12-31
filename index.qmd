@@ -1,0 +1,2149 @@
+---
+title: "_Concrete Compressive Strength Prediction_"
+subtitle: "Memprediksikan Kuat Tekan Beton"
+format: 
+  html: 
+    toc: true
+    toc-location: left
+    toc-title: Daftar Isi
+    number-sections: true
+    css: style.css
+    embed-resources: true
+    code-fold: true
+    code-link: true
+    code-overflow: scroll
+    code-line-numbers: false
+    code-block-border-left: false
+    code-copy: false
+    code-tools: 
+      source: false
+      toggle: false
+    fig-align: center
+    fig-cap-location: bottom
+    df-print: paged
+    link-external-newwindow: true
+    theme: journal
+bibliography: references.bib
+author: "Taruma Sakti Megariansyah"
+language: language_id.yml
+license: CC-BY-NC-SA 4.0
+lang: id
+date: 2022-12-20
+date-modified: 2022-12-31
+date-format: full
+execute: 
+  echo: true
+  freeze: false
+crossref: 
+  chapters: true
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Pendahuluan {#sec-intro .unnumbered}
+
+Lembar kerja ini merupakan versi _open source_ dari project capstone dengan judul yang serupa. Alur dokumen ini lebih mengarah ke perjalanan atau _diary_ saat menerapkan _machine learning_ ataupun mengeksplorasi dataset. Sehingga, dipastikan terdapat langkah yang keliru sepanjang perjalanan yang kemudian dikoreksi di langkah berikutnya. Jadi lembar kerja ini tidak terstruktur dan mengikuti konsep "_learning as you go_". 
+
+Semoga dokumen dan lembar kerja ini dapat bermanfaat dan memberikan gambaran bahwa mengeksplorasi dataset maupun implementasinya, bukanlah langkah yang cukup sekali dilakukan, dan akan muncul kesalahan sepanjang perjalanan. Dokumen ini sebagai catatan, bahwa kekeliruan yang terjadi bisa dikoreksi pada eksperimen berikutnya dan dapat digunakan sebagai pembelajaran. 
+
+Source code dokumen ini bisa diakses di GitHub [taruma/concrete-prediction](https://github.com/taruma/concrete-prediction). 
+
+::: {.callout-note .column-body-outset}
+Lembar kerja ini dirancang untuk dilihat di browser dengan resolusi `1920x1080` dengan scale `100%`. Lihat perubahan di [Changelog](#sec-changelog).
+:::
+
+::: {.border .p-3 .my-3}
+
+Dataset
+
+:   *Concrete Compressive Strength*
+
+Sumber Dataset
+
+:   (@misc_concrete_compressive_strength_165). Dengan sumber aslinya di [Archive UCI ML](https://archive.ics.uci.edu/ml/datasets/Concrete+Compressive+Strength) atau [Archive UCI (Beta)](https://archive-beta.ics.uci.edu/dataset/165/concrete+compressive+strength). Pada lembar kerja ini menggunakan dataset yang sudah berformat .csv dari [Kaggle: elikplim/concrete-compressive-strength-data-set ](https://www.kaggle.com/datasets/elikplim/concrete-compressive-strength-data-set)
+
+Goal
+
+:   Memprediksikan kuat tekan beton berdasarkan campuran beton dan umur beton.
+:::
+
+Struktur lembar kerja ini sebagai berikut:
+
+1.  @sec-setup *Pengaturan awal*: Bagian *package* apa saja yang digunakan dalam lembar kerja ini.
+2.  @sec-dataset *Dataset*: Penjelasan singkat mengenai dataset *Concrete Strength*.
+3.  @sec-pre *Prapemrosesan Data*: Mempersiapkan dataset untuk pekerjaan berikutnya.
+4.  @sec-eda *Analisis data eksploratif*: Mengeksplorasi dataset dan memperoleh informasi sebelum dilakukan pemodelan.
+5.  @sec-model *Pemodelan*: Pemodelan *machine learning*.
+7.  @sec-closing *Penutup*: Kesimpulan dan saran.
+
+Struktur tersebut bisa ditambah seiringnya waktu. 
+
+# Pengaturan awal {#sec-setup}
+
+```{r}
+#| code-summary: Paket yang digunakan
+#| include: true
+#| warning: false
+#| message: false 
+
+source("R/utils.R")
+
+require(see)
+require(downlit)
+require(xml2)
+library(performance)
+library(broom.mixed)
+library(jtools)
+library(summarytools)
+library(correlation)
+library(tidyverse)
+library(ggplot2)
+library(scico)
+library(e1071)
+library(ggpubr)
+library(caret)
+library(MLmetrics)
+library(randomForest)
+library(recipes)
+library(keras)
+library(rsample)
+library(GGally)
+```
+
+Versi R yang digunakan adalah $4.2+$ dan piping yang digunakan adalah *native piping* (`|>`).
+
+::: {.border .small .p-3 .text-center}
+```{r}
+#| code-summary: Versi R
+#| echo: false
+
+R.version
+```
+:::
+
+# Dataset {#sec-dataset}
+
+Dataset yang digunakan adalah *Concrete Compressive Strength* (@misc_concrete_compressive_strength_165) yang berisikan hasil observasi kuat tekan beton berdasarkan campuran beton dan umur beton. _Initial split_ menjadi data _training_ dan _testing_ dibagi menggunakan informasi dari `data/index_split.csv`. Dan dilakukan perubahan nama kolomnya sehingga lebih sederhana. 
+
+
+```{r}
+#| column: body-outset
+#| code-summary: "Membaca _dataset_ dan menyimpannya sebagai `concrete_train` dan `concrete_test`"
+
+concrete_all <- read.csv("data/concrete_data.csv")
+concrete_all$id <- paste0("O", sequence(nrow(concrete_all)))
+names(concrete_all) <- c(
+  "cement", "slag", "flyash",	"water", "super_plast",
+  "coarse_agg", "fine_agg", "age", "strength", "id"
+)
+concrete_all <- concrete_all |> 
+  select(all_of(c(
+  "id", "cement", "slag", "flyash",	"water", "super_plast",
+  "coarse_agg", "fine_agg", "age", "strength"
+)))
+
+split_index <- read.csv("data/index_split.csv")
+
+concrete_train <- concrete_all[-split_index$split_index,]
+concrete_test <- concrete_all[split_index$split_index,]
+concrete_train |> glimpse()
+```
+
+Keterangan setiap kolom/variabel di dataset dapat dilihat di @tbl-dataset-desc.
+
+| Kolom/variabel | Deskripsi                                 |    Satuan     |
+|---------------:|:------------------------------------------|:-------------:|
+|           `id` | ID unik setiap campuran beton / observasi |      \-       |
+|       `cement` | Jumlah semen                              |  $\text{Kg}$  |
+|         `slag` | Jumlah *blast furnace slag* (BFS)[^2]     | $\text{Kg}$.  |
+|       `flyash` | Jumlah abu terbang (*fly ash*)[^3]        |  $\text{Kg}$  |
+|  `super_plast` | Jumlah *superplasticizer*[^4]             |  $\text{Kg}$  |
+|   `coarse_agg` | Jumlah aggregat kasar                     |  $\text{Kg}$  |
+|     `fine_agg` | Jumlah aggregat halus                     |  $\text{Kg}$  |
+|          `age` | Umur beton                                | $\text{hari}$ |
+|     `strength` | Kuat tekan beton                          | $\text{MPa}$  |
+
+: Deksripsi setiap variabel di dataset {#tbl-dataset-desc}
+
+[^2]: [Penggunaan Fine Blast Furnace Slag dalam meningkatkan Sifat Beton](https://sipil.uma.ac.id/penggunaan-fine-blast-furnace-slag-dalam-meningkatkan-sifat-beton/)
+
+[^3]: [Mengenal dan Memahami Fly Ash](https://solusikonstruksi.com/mengenal-dan-memahami-fly-ash/)
+
+[^4]: [Mengenal Superplasticizer Pada Beton dan Jenisnya](https://indoprecast.com/mengenal-superplasticizer-pada-beton-dan-jenisnya/)
+
+Objek yang digunakan untuk prapemrosesan data (@sec-pre) adalah `concrete_train` dan `concrete_test`.
+
+# Prapemrosesan Data {#sec-pre}
+
+Untuk prapemrosesan data terdapat langkah-langkah yang dapat dilakukan antara lain memeriksa:
+
+1.  Deskripsi dataset untuk prapemrosesan data (@sec-pre-intro).
+2.  Data yang hilang (@sec-pre-missing).
+3.  *Outliers* / Pencilan (@sec-pre-outliers).
+4.  Korelasi independent variables (@sec-pre-corr).
+5.  Normalisasi / Standarisasi (@sec-pre-norm).
+
+## Deskripsi dataset {#sec-pre-intro}
+
+Pada bagian ini, dicoba untuk memahami mengenai dataset secara umum dari informasi yang tersedia di @sec-dataset dan @tbl-dataset-desc. Dari infromasi tersebut diketahui bahwa dataset memiliki $`r ncol(concrete_train)`$ kolom yaitu `r concrete_train |> names() |>  myfunc.code_wrapper()`.
+
+```{r}
+#| echo: false
+
+independent_variables <- concrete_train |> names() |> head(-1) |> tail(-1)
+dependent_variables <- concrete_train |> names() |> tail(1)
+
+```
+
+Diketahui bahwa pada lembar kerja ini kolom `r dependent_variables |> myfunc.code_wrapper()` berlaku sebagai *dependent variables*. Sedangkan *independent variables* antara lain: `r independent_variables |> myfunc.code_wrapper()`. Berikut $5$ baris pertama dari dataset `concrete_train` di @tbl-pre-intro-rows.
+
+```{r}
+#| column: page
+#| echo: false
+#| label: tbl-pre-intro-rows
+#| tbl-cap: "5 baris pertama `concrete_train`"
+
+concrete_train |> head(5) |> knitr::kable()
+```
+
+```{r}
+#| echo: false
+
+nrow_concrete_train <- nrow(concrete_train)
+ncol_concrete_train <- ncol(concrete_train)
+
+nrow_concrete_test <- nrow(concrete_test)
+ncol_concrete_test <- ncol(concrete_test)
+```
+
+Dataset `concrete_train` memiliki dimensi $`r nrow_concrete_train`$ baris dan $`r ncol_concrete_train`$ kolom, sedangkan dataset `concrete_test` memiliki dimensi $`r nrow_concrete_test`$ baris dan $`r ncol_concrete_test`$ kolom. Setelah mengetahui variabel mana yang dijadikan sebagai *independent* dan *dependent*, dilanjutkan dengan memeriksa data yang hilang di @sec-pre-missing.
+
+## Data yang hilang {#sec-pre-missing}
+
+Pemeriksaan data yang hilang akan dilakukan untuk data `concrete_train` dan `concrete_test`. Pemeriksaan dimulai dengan menggunakan `anyNA()`.
+
+```{r}
+#| column: body-outset
+#| echo: true
+#| code-summary: Memeriksa dengan `anyNA()`
+#| collapse: true
+
+concrete_train |> anyNA()
+concrete_test |> select(-strength) |> anyNA()
+```
+
+Jika hasil `anyNA()` bernilai `FALSE` maka dataset tidak memiliki data yang hilang. Dan dari hasil evaluasi diatas diperoleh bahwa dataset `concrete_train` dan `concrete_test` tidak memiliki data yang hilang (`NA`). Prapemrosesan dilanjut dengan memeriksa *outliers*.
+
+## *Outliers* {#sec-pre-outliers}
+
+Pemeriksaan *outliers* biasanya dilakukan menggunakan visualisasi `boxplot()` atau memeriksa jumlah nilai dibawah/diatas minimum/maksimumnya ($\text{min} = Q_1 - 1.5\times\text{IQR}$ atau $\text{max} = Q_3 + 1.5\times\text{IQR}$).
+
+*Boxplot* dibangkitkan menggunakan fungsi `boxplot()` dan diterapkan ke seluruh kolom numerik di dataset, hasilnya dapat dilihat di @fig-pre-all-boxplot.
+
+```{r}
+#| echo: false
+#| column: body-outset
+#| layout-ncol: 3
+#| label: fig-pre-all-boxplot
+#| fig-cap: Boxplot kolom _numeric_
+#| fig-subcap: 
+#|   - "Boxplot `cement`"
+#|   - "Boxplot `slag`"
+#|   - "Boxplot `flyash`"
+#|   - "Boxplot `water`"
+#|   - "Boxplot `super_plast`"
+#|   - "Boxplot `coarse_agg`"
+#|   - "Boxplot `fine_agg`"
+#|   - "Boxplot `age`"
+#|   - "Boxplot `strength`"
+
+boxplot(concrete_train$cement, horizontal = T)
+boxplot(concrete_train$slag, horizontal = T)
+boxplot(concrete_train$flyash, horizontal = T)
+boxplot(concrete_train$water, horizontal = T)
+boxplot(concrete_train$super_plast, horizontal = T)
+boxplot(concrete_train$coarse_agg, horizontal = T)
+boxplot(concrete_train$fine_agg, horizontal = T)
+boxplot(concrete_train$age, horizontal = T)
+boxplot(concrete_train$strength, horizontal = T)
+
+```
+
+```{r}
+#| echo: false
+
+outlier_data <- concrete_train |> 
+  select(-id) |> 
+  lapply(
+    function(.) {
+      outlier <- boxplot(., plot = F)$out
+      
+      if (length(outlier) == 0) {
+        return(NA)
+      } else {
+        return(outlier)
+      }
+    }
+  )
+```
+
+```{r}
+#| collapse: true
+#| echo: true
+#| column: body-outset
+#| code-summary: "Memeriksa ada potensi _outlier_ berdasarkan _boxplot_"
+
+!is.na(outlier_data)
+```
+
+Dari @fig-pre-all-boxplot, bisa terlihat terdapat beberapa kolom/variabel yang memiliki *"potensi" outlier*, antara lain: `r names(outlier_data) |> subset(!is.na(outlier_data)) |> myfunc.code_wrapper()`. Akan tetapi, *outlier* disini belum tentu data yang tidak valid. Sehingga, saat ini belum dapat diputuskan jika *outlier* tersebut dapat dihilangkan dari observasi.
+
+Untuk melihat distribusi untuk setiap dataset bisa menggunakan fungsi `hist()`. Seluruh histogram bisa dilihat pada @fig-pre-all-histogram.
+
+```{r}
+#| echo: false
+#| classes: 
+#|   - border 
+#|   - p-3
+#| column: body-outset
+#| layout-ncol: 3
+#| label: fig-pre-all-histogram
+#| fig-cap: Histogram kolom _numeric_
+#| fig-subcap: 
+#|   - "Histogram `cement`"
+#|   - "Histogram `slag`"
+#|   - "Histogram `flyash`"
+#|   - "Histogram `water`"
+#|   - "Histogram `super_plast`"
+#|   - "Histogram `coarse_agg`"
+#|   - "Histogram `fine_agg`"
+#|   - "Histogram `age`"
+#|   - "Histogram `strength`"
+
+hist(concrete_train$cement)
+hist(concrete_train$slag)
+hist(concrete_train$flyash)
+hist(concrete_train$water)
+hist(concrete_train$super_plast)
+hist(concrete_train$coarse_agg)
+hist(concrete_train$fine_agg)
+hist(concrete_train$age)
+hist(concrete_train$strength)
+
+```
+
+Dari @fig-pre-all-histogram, terlihat terdapat variabel yang tidak mendekati distribusi normal. Seperti pada @fig-pre-all-histogram-2 (`slag`), @fig-pre-all-histogram-3 (`flyash`), @fig-pre-all-histogram-5 (`super_plast`) bisa ditransformasi baik menggunakan log ataupun metode lainnya. Akan tetapi, untuk tahap ini, transformasi dilakukan ketika masuk ke @sec-model Pemodelan.
+
+Untuk kolom `age`, bisa dibilang bahwa kolom tersebut bukanlah nilai yang kontinu. Hal tersebut dikarenakan pada pengukuran kuat tekan beton dilakukan pada interval hari-hari tertentu (dengan penggunaan aktualnya yaitu $28$ hari. Di `concrete_train` terdapat nilai unik di kolom `age` yaitu `r concrete_train$age |> as.factor() |> levels() |> myfunc.code_wrapper()` hari. Frekuensi penggunaan umur beton di dataset `concrete_train` dapat dilihat di @fig-pre-bar-age.
+
+```{r}
+#| echo: false
+#| column: body
+#| layout-ncol: 2
+#| label: fig-pre-bar-age
+#| fig-cap: Frekuensi umur beton pada dataset
+#| fig-subcap: 
+#|   - "Frekuensi di `concrete_train`"
+#|   - "Frekuensi di `concrete_test`"
+
+concrete_train$age |> as.factor() |> table() |> barplot()
+concrete_test$age |> as.factor() |> table() |> barplot()
+```
+
+Akan tetapi, dugaan tersebut bisa saja keliru, karena bisa saja terdapat hubungan linear ataupun non-linear antara kuat tekan beton dengan umur beton yang dianggap sebagai kontinu. Jadi, pada proses nantinya, nilai umur beton ini akan dianggap sebagai nilai yang kontinu.
+
+```{r}
+#| echo: false
+#| output: false
+
+ages_in_train <- concrete_train$age |> as.factor() |> levels()
+ages_in_test <- concrete_test$age |> as.factor() |> levels()
+
+ages_not_in_test <- ages_in_train |> 
+  subset(!(ages_in_train %in% ages_in_test))
+ages_not_in_test
+```
+
+Dari @fig-pre-bar-age Frekuensi observasi berdasarkan `age`, terlihat di `concrete_train` terdapat observasi dengan umur beton yang tidak tersedia di `concrete_test` yaitu pada umur beton `r ages_not_in_test |> myfunc.code_wrapper()`. Dengan mengetahui hal tersebut, bisa juga dilakukan penghapusan observasi di `concrete_train` yang tidak diuji di `concrete_test`.
+
+Menutup bagian *outlier*, dari eksperimen yang telah dilakukan diatas, dapat diidentifikasi beberapa *"potensi" outlier* dan karakteristik distribusi masing-masing variabel. Tapi untuk melakukan tindakan terkait informasi tersebut ditunda pada tahap pemodelan untuk variasi data *input*.
+
+## Korelasi {#sec-pre-corr}
+
+Sampai saat ini, dataset masih tidak ada transformasi ataupun koreksi. Dataset `concrete_train` maupun `concrete_test` tidak memiliki data yang hilang. Sedangkan untuk *outliers*, masih ditunda terlebih dahulu dan akan dievaluasi lebih lanjut saat @sec-eda Analisis data eksploratif (*Exploratory Data Analysis*).
+
+Pada @sec-pre-corr, akan diperiksa korelasi antar variabel dalam dataset. Apakah terdapat variabel independen yang saling berhubungan atau tidak. Pemeriksaan ini diperlukan jika menggunakan pemodelan sederhana seperti regresi linear[^5][^6]. Tapi untuk lembar kerja ini tidak akan menggunakan model regresi linear.
+
+[^5]: [Assumptions of linear regression](https://towardsdatascience.com/assumptions-of-linear-regression-fdb71ebeaa8b)
+
+[^6]: [The Four Assumptions of Linear Regression](https://www.statology.org/linear-regression-assumptions/)
+
+Untuk melihat korelasi bisa divisualisasikan dalam bentuk *correlogram* menggunakan fungsi `ggcorr()`, hasilnya dapat dilihat di @fig-pre-ggpairs.
+
+```{r}
+#| column: body
+#| echo: false
+#| label: fig-pre-ggpairs
+#| fig-cap: "Korelasi `concrete_train` menggunakan `ggcorr()`"
+
+concrete_train |> select(-id, -age) |> 
+  ggcorr(
+    method = "pairwise",
+    geom = "tile",
+    label = TRUE, label_size = 3, label_alpha = TRUE,
+    hjust = 0.6,
+    layout.exp = 2,
+    nbreaks = 7,
+    low = "#2980B9", mid = "#ECF0F1", high = "#2C3E50"
+  )
+```
+
+```{r}
+#| echo: false
+
+correlation_matrix <- cor(concrete_train |> select_if(is.numeric)) |> as.data.frame()
+```
+
+Dari @fig-pre-ggpairs, jika mengevaluasi nilai yang mendekati $1$ diketahui bahwa hubungan antara `water` dan `super_plast` berkorelasi negatif dengan nilai $`r correlation_matrix["water", "super_plast"] |> round(1)`$.
+
+Dari informasi diatas, dapat dilakukan penyesuaian kembali mengenai prediktor (`r independent_variables |> myfunc.code_wrapper()`) dengan target (`r dependent_variables |> myfunc.code_wrapper()`) seperti menggabungkan dua (atau lebih) variabel yang memiliki keserupaan/berkorelasi tinggi (positif maupun negatif). Tapi untuk sampai saat ini, tidak akan tindakan karena korelasi antar variabel masih tergolong rendah.
+
+## Normalisasi {#sec-pre-norm}
+
+Tahap normalisasi atau standarisasi akan tergantung pada model yang digunakan dan limitasi model tersebut. Sehingga tahapan transformasi ini akan dilakukan sebelum masuk ke tahap pemodelan di @sec-model.
+
+# Analisis data eksploratif {#sec-eda}
+
+Dalam bagian analisis data eksploratif (ADE) akan lebih fokus mempelajari mengenai hubungan antara variabel yang tersedia di dataset. Sehingga, tahapan ini akan lebih fokus ke memperoleh *insight* yang bisa didapatkan dari dataset. Berikut beberapa proses yang akan dilakukan di bagian ini:
+
+1.  @sec-eda-viz Visualisasi: Memvisualisasikan berbagai jenis grafik untuk melihat hubungan variabel di dataset.
+2.  @sec-eda-stat Statistik: Menghitung deskriptif statistik pada dataset *train* dan *test*.
+3.  @sec-eda-outliers *Outliers* dan anomali: Melihat observasi yang berbeda dengan yang lain (*outliers*).
+4.  @sec-eda-linear Hubungan linear: Serupa dengan @sec-pre-corr Korelasi akan tetapi ini lebih detail melihat hubungannya.
+5.  @sec-eda-transform Transformasi: Melakukan beberapa transformasi dataset yang diperlukan.
+
+## Visualisasi dataset {#sec-eda-viz}
+
+Visualisasi mengenai setiap variabel yang tersedia dalam dataset sudah divisualisasikan sebelumnya pada @sec-pre di @fig-pre-all-boxplot *Boxplot* setiap variabel, @fig-pre-all-histogram *Histogram* setiap variabel, @fig-pre-bar-age *Barplot* frekuensi variabel `age`, @fig-pre-ggpairs *Correlogram* setiap variabel.
+
+### Histogram {#sec-eda-histogram}
+
+Visualisasi histogram dapat memberikan gambaran besar mengenai distribusi/penyebaran variabelnya. Hal ini bisa mempengaruhi bagaimana mentransformasi dataset untuk pemodelan. Seperti yang sempat didiskusikan di @sec-pre-outliers dan @fig-pre-bar-age mengenai frekuensi `age` pada dataset, variabel `age` bisa dianggap sebagai suatu nilai kategorikal. Untuk melihat distribusi setiap variabel terhadap age dapat dilihat pada @fig-eda-viz-histage-train untuk dataset `concrete_train` dan @fig-eda-viz-histage-test untuk dataset `concrete_test`. Histogram dibangkitkan menggunakan `ggplot()` dengan `geom_histogram()`.
+
+```{r}
+#| echo: false
+
+myplot_hist_to_age <- function(data, column) {
+  data |> 
+    select(-id) |> 
+    ggplot(aes(x = !!as.name(column), fill = age, color = age)) +
+    geom_histogram(alpha = 0.6, bins = 20, position = "identity") +
+    scale_fill_scico_d(palette = "bukavu") +
+    theme_bw()
+}
+
+concrete_train_factored_age <- concrete_train |> 
+  mutate(age = as.factor(age))
+concrete_test_factored_age <- concrete_test |>
+  mutate(age = as.factor(age))
+levels_age <- levels(concrete_train_factored_age$age)
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 4
+#| label: fig-eda-viz-histage-train
+#| fig-cap: "Histogram `concrete_train` terhadap `age`"
+#| fig-subcap: 
+#|   - "Histogram `cement`"
+#|   - "Histogram `slag`"
+#|   - "Histogram `flyash`"
+#|   - "Histogram `water`"
+#|   - "Histogram `super_plast`"
+#|   - "Histogram `coarse_agg`"
+#|   - "Histogram `fine_agg`"
+#|   - "Histogram `strength`"
+
+concrete_train_factored_age |> myplot_hist_to_age("cement")
+concrete_train_factored_age |> myplot_hist_to_age("slag")
+concrete_train_factored_age |> myplot_hist_to_age("flyash")
+concrete_train_factored_age |> myplot_hist_to_age("water")
+concrete_train_factored_age |> myplot_hist_to_age("super_plast")
+concrete_train_factored_age |> myplot_hist_to_age("coarse_agg")
+concrete_train_factored_age |> myplot_hist_to_age("fine_agg")
+concrete_train_factored_age |> myplot_hist_to_age("strength")
+
+```
+
+Seperti dinyatakan sebelumnya bahwa untuk memperoleh kuat tekan beton yang optimal biasanya sudah diperoleh pada umur beton $28$ hari[^7], sehingga kemungkinan pada saat pengujian lebih sering dilakukan pada $28$ hari, yang mengakibatkan informasi pada $28$ hari lebih banyak dibandingkan hari-hari lainnya.
+
+[^7]: [Why do we test concrete compressive strength after 28 days?](https://theconstructor.org/concrete/why-we-test-concrete-strength-after-28-days/6060/)
+
+Dari @fig-eda-viz-histage-train, dapat diperoleh beberapa *insight* berupa:
+
+-   Dibandingkan dengan @fig-pre-all-histogram, pada umur beton tertentu memiliki kontribusi frekuensi terbesar keseluruhan yaitu $28$ hari. Seperti di gambar @fig-eda-viz-histage-train-1 (`cement`) atau @fig-eda-viz-histage-train-7 (`fine_agg`), terlihat umur beton $28$ hari memiliki kontribusi yang lebih banyak dibandingkan umur beton lainnya. Ini juga bisa dikarenakan jumlah observasi dengan umur beton $28$ hari lebih banyak dengan yang lain (@fig-pre-bar-age Frekuensi observasi dengan umur beton).
+-   Terlepas pemisahan dengan umur beton, @fig-eda-viz-histage-train-2 (`slag`), @fig-eda-viz-histage-train-3 (`flyash`), dan @fig-eda-viz-histage-train-5 (`super_plast`), material tersebut tidak banyak digunakan di campuran beton dalam dataset `concrete_train`. Hal ini bisa diasumsikan bahwa komponen material tersebut bisa tidak terlalu signifikan. Akan tetapi, kesimpulan tersebut belum bisa diraih karena bisa dianalisis lebih lanjut dengan membandingkan kuat tekan beton dengan variabel tersebut.
+
+Berikut proses yang serupa tetapi menggunakan dataset `concrete_test` (@fig-eda-viz-histage-test).
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 4
+#| label: fig-eda-viz-histage-test
+#| fig-cap: "Histogram `concrete_test` terhadap `age`"
+#| fig-subcap: 
+#|   - "Histogram `cement`"
+#|   - "Histogram `slag`"
+#|   - "Histogram `flyash`"
+#|   - "Histogram `water`"
+#|   - "Histogram `super_plast`"
+#|   - "Histogram `coarse_agg`"
+#|   - "Histogram `fine_agg`"
+
+concrete_test_factored_age |> myplot_hist_to_age("cement")
+concrete_test_factored_age |> myplot_hist_to_age("slag")
+concrete_test_factored_age |> myplot_hist_to_age("flyash")
+concrete_test_factored_age |> myplot_hist_to_age("water")
+concrete_test_factored_age |> myplot_hist_to_age("super_plast")
+concrete_test_factored_age |> myplot_hist_to_age("coarse_agg")
+concrete_test_factored_age |> myplot_hist_to_age("fine_agg")
+```
+
+Melihat secara sekilas @fig-eda-viz-histage-test Histogram `concrete_test` tidak jauh berbeda dengan @fig-eda-viz-histage-train Histogram `concrete_train`. Akan tetapi, dapat dilihat pada `concrete_test` tidak ada umur beton `r ages_not_in_test |> myfunc.code_wrapper()` hari dikarenakan umur beton tersebut tidak tersedia di dataset `concrete_test`. Informasi tersebut juga bisa dilihat di @fig-pre-bar-age mengenai frekuensi umur beton di kedua dataset.
+
+### *Box Plot* {#sec-eda-boxplot}
+
+*Box plot* juga dapat diterapkan untuk setiap variabel yang tersedia di dataset. Seperti sebelumnya di @sec-eda-histogram, dataset akan divisualisasikan terhadap umur beton. *Boxplot* untuk dataset `concrete_train` dan `concrete_test` bisa dilihat pada @fig-eda-viz-boxage-train dan @fig-eda-viz-boxage-test. *Boxplot* setidaknya memberikan gambaran sebaran data setiap variabel berdasarkan umur beton sehingga mampu memberi informasi terkait hubungan antara umur beton dengan variabel, yang harapannya akan lebih jelas dibandingkan grafik histogram di @sec-eda-histogram. *Boxplot* dibangkitkan menggunakan `ggplot()` dengan `geom_boxplot()` dan `geom_jitter()`.
+
+```{r}
+#| echo: false
+
+myplot_boxplot_to_age <- function(data, column) {
+  data |> 
+    select(-id) |> 
+    ggplot(aes(x = !!as.name(column), fill = age, y = age)) +
+    geom_boxplot() +
+    geom_jitter(color = 4, alpha = 0.3) +
+    scale_fill_scico_d(palette = "bukavu") +
+    theme_bw()
+}
+
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 4
+#| label: fig-eda-viz-boxage-train
+#| fig-cap: "Boxplot `concrete_train` terhadap `age`"
+#| fig-subcap: 
+#|   - "Boxplot `cement`"
+#|   - "Boxplot `slag`"
+#|   - "Boxplot `flyash`"
+#|   - "Boxplot `water`"
+#|   - "Boxplot `super_plast`"
+#|   - "Boxplot `coarse_agg`"
+#|   - "Boxplot `fine_agg`"
+#|   - "Boxplot `strength`"
+
+concrete_train_factored_age |> myplot_boxplot_to_age("cement")
+concrete_train_factored_age |> myplot_boxplot_to_age("slag")
+concrete_train_factored_age |> myplot_boxplot_to_age("flyash")
+concrete_train_factored_age |> myplot_boxplot_to_age("water")
+concrete_train_factored_age |> myplot_boxplot_to_age("super_plast")
+concrete_train_factored_age |> myplot_boxplot_to_age("coarse_agg")
+concrete_train_factored_age |> myplot_boxplot_to_age("fine_agg")
+concrete_train_factored_age |> myplot_boxplot_to_age("strength")
+
+```
+
+Dari @fig-eda-viz-boxage-train, bisa melihat distribusinya lebih jelas yang mampu mempertajam informasi setelah grafik histogram di @sec-eda-histogram Histogram. Akan tetapi, visualisasi *boxplot* bergantung dengan jumlah datanya, sehingga akan sulit mengambil kesimpulan distribusi mengenai setiap variabel terhadap umur beton. Berikut informasi yang dapat diperoleh dari visualisasi @fig-eda-viz-boxage-train Boxplot `concrete_train` terhadap umur beton:
+
+-   Jika ukuran kotak (IQR) kecil bisa disimpulkan bahwa datanya sedikit, tidak menyebar (pada *range* tertentu), atau tidak memiliki dataset sama sekali. Perilaku ini bisa dilihat pada @fig-eda-viz-boxage-train-1 (`cement`) di umur beton $120$ hari dan $1$ hari (hanya tersedia 2 *data point* atau observasi). Karena itu, di varibel lainnya seperti @fig-eda-viz-boxage-train-8 (`strength`) umur beton $1$ dan $120$ hari memiliki IQR yang kecil dibandingkan umur beton lainnya yang memiliki observasi yang lebih banyak (lebih dari dua observasi).
+-   Berdasarkan informasi histogram di @fig-eda-viz-histage-train, diketahui bahwa `slag`, `flyash`, dan `super_plast` memiliki jumlah data yang banyak dengan berat $0\ \text{Kg}$. Dan hal tersebut terlihat pada @fig-eda-viz-boxage-train-2, @fig-eda-viz-boxage-train-3, @fig-eda-viz-boxage-train-5. Pada umur beton tertentu terdapat observasi dimana campuran beton tidak menggunakan komponen tersebut sama sekali.
+
+Berikut visualisasi yang serupa untuk data `concrete_test` di @fig-eda-viz-boxage-test.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 4
+#| label: fig-eda-viz-boxage-test
+#| fig-cap: "Boxplot `concrete_test` terhadap `age`"
+#| fig-subcap: 
+#|   - "Boxplot `cement`"
+#|   - "Boxplot `slag`"
+#|   - "Boxplot `flyash`"
+#|   - "Boxplot `water`"
+#|   - "Boxplot `super_plast`"
+#|   - "Boxplot `coarse_agg`"
+#|   - "Boxplot `fine_agg`"
+
+concrete_test_factored_age |> myplot_boxplot_to_age("cement")
+concrete_test_factored_age |> myplot_boxplot_to_age("slag")
+concrete_test_factored_age |> myplot_boxplot_to_age("flyash")
+concrete_test_factored_age |> myplot_boxplot_to_age("water")
+concrete_test_factored_age |> myplot_boxplot_to_age("super_plast")
+concrete_test_factored_age |> myplot_boxplot_to_age("coarse_agg")
+concrete_test_factored_age |> myplot_boxplot_to_age("fine_agg")
+
+```
+
+Perlu dicatat bahwa pada `concrete_test` tidak memiliki observasi dengan umur beton `r ages_not_in_test |> myfunc.code_wrapper()` hari. Berikut yang bisa diperoleh dengan mengevaluasi @fig-eda-viz-boxage-test:
+
+-   Secara sekilas bahwa dataset `concrete_test` dan `concrete_train` memiliki keserupaan. Seperti pada @fig-eda-viz-boxage-test-2 (`slag`), @fig-eda-viz-boxage-test-3 (`flyash`), @fig-eda-viz-boxage-test-5 (`super_plast`) memiliki karakteristik yang sama dengan `concrete_train` yaitu, pada umur beton tertentu, terdapat campuran beton yang tidak menggunakan material tersebut.
+-   Pada umur beton $120$ hari, hanya tersedia satu observasi yang akan diuji. Hal ini bisa dilihat di *boxplot* semua variabel tentunya tapi terlihat jelas ketika melihat @fig-eda-viz-boxage-test-7 (`fine_agg`).
+-   Keseluruhan data yang paling banyak observasinya yaitu $28$ hari (informasi ini juga bisa diketahui dengan @fig-pre-bar-age), sehingga sebaran data yang paling bervariasi didominasi oleh yang berumur beton $28$ hari.
+
+### *Scatter plot* {#sec-eda-scatter}
+
+*Scatter plot* digunakan untuk melihat hubungan antara dua (atau lebih) variabel. Berbeda dengan visualisasi sebelumnya yang dikategorikan dengan umur beton (`age`), untuk visualisasi *scatter plot* akan dilihat hubungan antara *predictor*/*features*/*independent variable* dengan *target*/*dependent variable* yaitu kuat tekan beton (`strength`). Oleh karena itu, untuk `concrete_test` tidak dapat divisualisasikan karena tidak memiliki informasi kuat tekan betonnya. *Scatter plot* dibangkitkan menggunakan `ggplot()` dengan `geom_point()` dan `geom_smooth()` dengan argumen `method = lm`. Hasilnya dapat dilihat di @fig-eda-viz-scatter-train.
+
+```{r}
+#| echo: false
+
+myplot_scatter <- function(data, column) {
+  data |> 
+    select(-id) |> 
+    ggplot(aes(x = !!as.name(column), y = strength)) +
+    geom_point(aes(color = age), alpha = 0.5, size = 3) +
+    geom_smooth(method = lm, color = 1) +
+    scale_color_scico_d(palette = "lajolla") +
+    theme_bw()
+}
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| layout-ncol: 4
+#| label: fig-eda-viz-scatter-train
+#| fig-cap: "Hubungan antara _features_ dengan `strength`"
+#| fig-subcap: 
+#|   - "Hubungan dengan `cement`"
+#|   - "Hubungan dengan `slag`"
+#|   - "Hubungan dengan `flyash`"
+#|   - "Hubungan dengan `water`"
+#|   - "Hubungan dengan `super_plast`"
+#|   - "Hubungan dengan `coarse_agg`"
+#|   - "Hubungan dengan `fine_agg`"
+
+concrete_train_factored_age |> myplot_scatter("cement")
+concrete_train_factored_age |> myplot_scatter("slag")
+concrete_train_factored_age |> myplot_scatter("flyash")
+concrete_train_factored_age |> myplot_scatter("water")
+concrete_train_factored_age |> myplot_scatter("super_plast")
+concrete_train_factored_age |> myplot_scatter("coarse_agg")
+concrete_train_factored_age |> myplot_scatter("fine_agg")
+
+```
+
+Dari @fig-eda-viz-scatter-train diatas, berikut beberapa informasi yang dapat diperoleh:
+
+-   Hubungan *linear* antara *predictor* dan *target* yang lebih baik (dibandingkan yang lain) yaitu hubungan `strength` dengan `cement`, `water`, `coarse_agg`, dan `fine_agg`. Ke empat prediktor tersebut tidak "terbebani" oleh jumlah material $0\ \text{Kg}$ sehingga hasil "regresi"-nya mampu memberikan gambaran besar mengenai hubungan antara prediktor tersebut dengan kuat tekan beton dibandingkan material lainnya.
+-   Secara sekilas bahwa umur beton yang muda, tidak memiliki kuat beton yang tinggi. Hal ini dapat dilihat di salah satu grafik hubungan antara @fig-eda-viz-scatter-train-1 (`cement`) atau @fig-eda-viz-scatter-train-2 (`slag`) yang terlihat terdapat observasi dengan umur beton yang muda (kurang dari $14$ hari). Informasi ini juga memperkuat visualisasi boxplot di @fig-eda-viz-boxage-train-8 (`strength`) yang memberikan distribusi kuat tekan beton yang berumur dibawah $14$ hari kecil (tidak mencapai kuat tekan beton optimal).
+-   Seperti dinyatakan di poin pertama, bahwa regresi untuk @fig-eda-viz-scatter-train-2 (`slag`), @fig-eda-viz-scatter-train-3 (`flyash`), @fig-eda-viz-scatter-train-5 (`super_plast`) dibebani oleh data poin yang tertumpuk pada $0\ \text{Kg}$. Akan tetapi, tidak adanya penggunaan material tersebut bukan berarti sebagai *outlier* yang harus dihilangkan karena data tersebut merupakan data yang *valid*.
+
+Setelah cukup melakukan visualisasi, dataset akan dieksplorasi kembali menggunakan statistik deskriptif di @sec-eda-stat.
+
+## Statistik {#sec-eda-stat}
+
+Sebenarnya, statistik disini sudah dirangkum dalam visualisasi yang dilakukan di @sec-eda-viz Visualisasi. Akan tetapi, jika membutuhkan perbandingan informasi perhitungan, lebih mudah jika melihat menggunakan angka yang diperoleh dari perhitungan statistiknya. Berikut nilai statistik yang diperoleh menggunakan `desc()` dan `freq()` pada dataset `concrete_train` dan `concrete_test` yang dapat dilihat di @tbl-eda-summary.
+
+```{r}
+#| echo: false
+#| column: screen-inset-shaded
+#| label: tbl-eda-summary
+#| tbl-cap: "Tabel _Summary_"
+#| tbl-subcap: 
+#|   - "_Summary_ numerik _training_"
+#|   - "_Summary_ numerik _testing_"
+#|   - "Frekuensi `age` _training_"
+#|   - "Frekuensi `age` _testing_"
+#| collapse: false
+#| layout-ncol: 2
+#| classes: small
+
+concrete_train_factored_age |> select(-id, -age) |>
+  summarytools::descr(transpose = TRUE, headings = FALSE,
+                      stats = c("min", "q1", "med", "mean", "q3", "max", "iqr", "sd"),
+                      order = "p") |> round(2)
+
+concrete_test_factored_age |> select(-id, -age, -strength) |>
+  summarytools::descr(transpose = TRUE, headings = FALSE,
+                      stats = c("min", "q1", "med", "mean", "q3", "max", "iqr", "sd"),
+                      order = "p") |> round(2)
+
+concrete_train_factored_age$age |> 
+  summarytools::freq(heading = FALSE) |> round(2) |> knitr::kable()
+
+concrete_test_factored_age$age |> 
+  summarytools::freq(heading = FALSE) |> round(2) |> knitr::kable()
+
+```
+
+Informasi statistik diatas telah divisualisasikan di @sec-pre Prapemrosesan data atau @sec-eda-viz Visualisasi di @sec-eda ADE. Dan beberapa grafik sudah diberi penjelasan atau informasi yang diperoleh dari memvisualisasikannya. Tapi terdapat grafik yang belum melihat dispersi dataset menggunakan `geom_density()`. Grafik *density plot* dapat dilihat di @fig-eda-viz-density-train. Tapi sebelum melihat grafik *density plot*, bisa dilihat kecenderungan dispersi (sebaran) data menggunakan `skewness()` atau `kurtosis()`. Hasil perhitungan bisa dilihat di @tbl-eda-dispersion.
+
+```{r}
+#| echo: false
+#| label: tbl-eda-dispersion
+#| tbl-cap: "Dispersi data menggunakan `skewness()` dan `kurtosis()`"
+#| tbl-subcap: 
+#|   - "Dispersi `concrete_train`"
+#|   - "Dispersi `concrete_test`"
+#| layout-ncol: 2
+#| column: page
+
+concrete_train_factored_age |> 
+  select(-id, -age) |> 
+  summarise_all(function(.) {c(skewness(.), kurtosis(.))}) |> 
+  ungroup() |> 
+  mutate(rowname = c("skewness", "kurtosis")) |> 
+  column_to_rownames() |> t() |> 
+  as.data.frame() |> knitr::kable()
+
+concrete_test_factored_age |> 
+  select(-id, -age, -strength) |> 
+  summarise_all(function(.) {c(skewness(.), kurtosis(.))}) |> 
+  ungroup() |> 
+  mutate(rowname = c("skewness", "kurtosis")) |> 
+  column_to_rownames() |> t() |> 
+  as.data.frame() |> knitr::kable()
+```
+
+Dari @tbl-eda-dispersion, diperoleh inforasi *skewness* dan *kurtosis* yang bisa memberikan kecenderungan distribusi data cenderung ke-kiri ataupun ke-kanan dari distribusi normal. Jika nilai skewness positif, maka data cenderung ke kiri, berlaku juga sebaliknya. Jika nilainya mendekati $0$, maka dataset cenderung ke distribusi normal. Untuk *kurtosis*, jika nilainya $0$ maka bentuk distribusinya seperti distribusi normal (*bell-shape*). Jika nilainya positif, disebut *leptokurtic* (lebih runcing kepuncak), sedangkan jika negatif, disebut *platykurtic* (lebih merata puncaknya)[^8]. Setelah memahami hal tersebut, baru bisa mudah menghubungkan angka tersebut dengan grafik @fig-eda-viz-density-train atau @fig-eda-viz-density-test.
+
+[^8]: [Can Kurtosis Be Negative?](https://www.statology.org/can-kurtosis-be-negative/)
+
+```{r}
+#| echo: false
+
+myplot_density <- function(data, column) {
+  data |> 
+    ggplot(aes(x = !!as.name(column))) +
+    geom_density(fill = 4, alpha = 0.5) +
+    scale_x_continuous(expand = c(0,0)) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    theme_bw()
+}
+
+# concrete_test_factored_age |> myplot_density("water")
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| classes: 
+#|   - border
+#|   - p-2
+#| layout-ncol: 8
+#| label: fig-eda-viz-density-train
+#| fig-cap: "_Density plot_ data `concrete_train`"
+#| fig-subcap: 
+#|   - "_Density plot_ `cement`"
+#|   - "_Density plot_ `slag`"
+#|   - "_Density plot_ `flyash`"
+#|   - "_Density plot_ `water`"
+#|   - "_Density plot_ `super_plast`"
+#|   - "_Density plot_ `coarse_agg`"
+#|   - "_Density plot_ `fine_agg`"
+#|   - "_Density plot_ `strength`"
+
+concrete_train_factored_age |> myplot_density("cement")
+concrete_train_factored_age |> myplot_density("slag")
+concrete_train_factored_age |> myplot_density("flyash")
+concrete_train_factored_age |> myplot_density("water")
+concrete_train_factored_age |> myplot_density("super_plast")
+concrete_train_factored_age |> myplot_density("coarse_agg")
+concrete_train_factored_age |> myplot_density("fine_agg")
+concrete_train_factored_age |> myplot_density("strength")
+
+```
+
+Dari @fig-eda-viz-density-train diatas, terlihat bahwa kecenderungan penyebaran dataset. Yang mendekati distribusi normal antara lain @fig-eda-viz-density-train-4, @fig-eda-viz-density-train-6, @fig-eda-viz-density-train-7, @fig-eda-viz-density-train-8 secara visual dengan parameter *skewness* dan *kurtosis* di @tbl-eda-dispersion-1. Berikut dispersi untuk dataset `concrete_test` di @fig-eda-viz-density-test.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| classes: 
+#|   - border
+#|   - p-2
+#| layout-ncol: 7
+#| label: fig-eda-viz-density-test
+#| fig-cap: "_Density plot_ data `concrete_test`"
+#| fig-subcap: 
+#|   - "_Density plot_ `cement`"
+#|   - "_Density plot_ `slag`"
+#|   - "_Density plot_ `flyash`"
+#|   - "_Density plot_ `water`"
+#|   - "_Density plot_ `super_plast`"
+#|   - "_Density plot_ `coarse_agg`"
+#|   - "_Density plot_ `fine_agg`"
+
+concrete_test_factored_age |> myplot_density("cement")
+concrete_test_factored_age |> myplot_density("slag")
+concrete_test_factored_age |> myplot_density("flyash")
+concrete_test_factored_age |> myplot_density("water")
+concrete_test_factored_age |> myplot_density("super_plast")
+concrete_test_factored_age |> myplot_density("coarse_agg")
+concrete_test_factored_age |> myplot_density("fine_agg")
+
+```
+
+Dari @fig-eda-viz-density-test diatas, memiliki bentuk yang tidak jauh berbeda dengan dataset `concrete_train` di @fig-eda-viz-density-train. Sehingga, bisa diasumsikan bahwa dataset untuk pengujian bisa mewakili distribusi yang terjadi di dataset *training*. Informasi diatas akan dibahas kembali saat memasuki pemodelan. Setelah menghitung beberapa parameter statistik, dilanjutkan dengan evaluasi *outliers* dan/atau anomali.
+
+## *Outliers* dan anomali {#sec-eda-outliers}
+
+Pada bab-bab sebelumnya, sempat dibahas mengenai "potensi" *outlier* dari informasi boxplot. Berikut *outlier* yang diperoleh menggunakan `boxplot()` dengan argumen `plot = FALSE` yang disimpan di objek `outlier_data` dari bagian @sec-pre-outliers.
+
+```{r}
+#| echo: true
+#| code-summary: "Objek `outlier_data`"
+#| collapse: true
+#| classes: scroll-100
+#| column: body-outset
+
+outlier_data
+```
+
+```{r}
+#| echo: false
+
+id_sample_not_tested <- concrete_train_factored_age |> 
+  filter(age %in% c("1", "360")) |> 
+  pull(id)
+```
+
+Akan tetapi, sebelum mengevaluasi *outlier* tersebut, terdapat data yang bisa dihilangkan berdasarkan umur beton karena pada data `concrete_test` terdapat umur beton yang tidak diuji yaitu `r ages_not_in_test |> myfunc.code_wrapper()` hari. Sehingga umur beton tersebut bisa dihilangkan di `concrete_train`. Dan diperoleh `id` dengan kode `r id_sample_not_tested |> myfunc.code_wrapper()` merupakan sampel yang tidak akan diuji umur betonnya.
+
+```{r}
+#| echo: true
+#| code-summary: "Objek `concrete_train_clean_age`"
+#| collapse: true
+#| column: body-outset
+
+concrete_train_clean_age <- concrete_train |> 
+  filter(!(id %in% id_sample_not_tested))
+concrete_train_clean_age_factored <- concrete_train_clean_age |> 
+  mutate(age = as.factor(age))
+
+nrow_concrete_train_clean_age <- concrete_train_clean_age |> nrow()
+ncol_concrete_train_clean_age <- concrete_train_clean_age |> ncol()
+
+dim(concrete_train_clean_age)
+```
+
+Jumlah baris `concrete_train` yang sebelumnya $`r nrow_concrete_train`$ baris menjadi $`r nrow_concrete_train_clean_age`$ baris, atau sebanyak $`r nrow_concrete_train - nrow_concrete_train_clean_age`$ baris yang dihapus. Adapun proporsi perbandingan umur beton dapat dilihat pada @tbl-eda-out-table.
+
+```{r}
+#| echo: false
+#| label: tbl-eda-out-table
+#| tbl-cap: "Banyaknya data dan proporsinya berdasarkan umur beton (`age`)"
+
+concrete_age_table <- data.frame(
+  concrete_train_clean_age$age |> table() |> c(),
+  concrete_test$age |> table() |> c()
+) |> 
+  setNames(c("train", "test")) |> 
+  rownames_to_column("age") |> 
+  mutate(
+    train_percentage = (train / sum(train)) |> round(4) * 100,
+    test_percentage = (test / sum(test)) |> round(4) * 100,
+    age = factor(age, levels = concrete_train_clean_age_factored$age |> levels())
+  )
+
+concrete_age_table |> knitr::kable()
+```
+
+Untuk memudahkan membandingkan perbandingan data tersebut, dibuatkan juga visualisasinya yang dapat dilihat di @fig-eda-out-table.
+
+```{r}
+#| echo: false
+#| column: page
+#| layout-ncol: 2
+#| label: fig-eda-out-table
+#| fig-cap: "Banyaknya data dan proporsinya berdasarkan umur beton"
+#| fig-height: 4
+#| fig-width: 6
+#| fig-subcap: 
+#|   - "Perbandingan jumlah data"
+#|   - "Perbandingan proporsi data"
+
+concrete_age_table |> 
+  select(age, train, test) |> 
+  pivot_longer(-age, names_to = "dataset", values_to = "value") |> 
+  mutate(
+    dataset = factor(dataset, levels = c("test", "train"))
+  ) |> 
+  ggplot(aes(x = age, y = value, fill = dataset)) +
+  geom_col(position = position_dodge(0.7), color = 1, alpha = 0.7, width = 0.5) +
+  coord_flip() +
+  geom_text(aes(label = paste0(value)), hjust = -0.3, position = position_dodge(0.9), size = 3) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  # scale_fill_scico_d(palette = "davos") +
+  theme_bw()
+  
+
+concrete_age_table |> 
+  select(age, train_percentage, test_percentage) |> 
+  rename(train = train_percentage, test = test_percentage) |> 
+  pivot_longer(-age, names_to = "dataset", values_to = "value") |> 
+  mutate(
+    dataset = factor(dataset, levels = c("test", "train"))
+  ) |> 
+  ggplot(aes(x = age, y = value, fill = dataset)) +
+  geom_col(position = position_dodge(0.7), color = 1, alpha = 0.7, width = 0.5) +
+  coord_flip() +
+  geom_text(aes(label = paste0(value, "%")), hjust = -0.3, position = position_dodge(0.9), size = 3) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  # scale_fill_scico_d(palette = "davos") +
+  theme_bw()
+  
+```
+
+Di @fig-eda-out-table-1, yang membandingkan dengan jumlah data, sudah jelas dataset *train* pasti lebih banyak karena jumlah observasinya berbeda jauh. Di `concrete_train_clean_age` terdapat $`r nrow_concrete_train_clean_age`$ observasi, sedangkan di `concrete_test` terdapat $`r nrow_concrete_test`$ observasi. Akan tetapi jika dilihat proporsinya di @fig-eda-out-table-2, terlihat bahwa proporsinya tidak jauh berbeda. Sehingga, jika dimodelkan, bisa menggunakan hipotesis bahwa dataset saat *training* maupun *testing* merata.
+
+Sejauh ini penghapusan *outlier* masih sebatas melihat berdasarkan umur beton yang sampai saat ini diasumsikan sebagai *categorical* atau *factor*. Akan tetapi, kenyataannya, kuat tekan beton dapat dipengaruhi umur beton dan bersifat kontinu (baik linear maupun non-linear), hanya saja untuk mengetahui kuat tekan beton hanya dapat dilakukan dengan uji kuat tekan beton. Alasan tersebut lah yang memungkinkan bahwa pada variabel `age` atau umur beton seperti diskrit atau kategori.
+
+## Hubungan linear {#sec-eda-linear}
+
+Hubungan antara *target* yaitu `strength` terhadap variabel lainnya sempat dibahas di @sec-eda-viz pada bagian @sec-eda-scatter *Scatter plot*. Grafik hubungan antar variabel juga bisa dilihat di @fig-eda-viz-scatter-train. Pada bagian ini, akan disajikan korelasi dengan beberapa informasi tambahan seperti informasi *Confidence Interval* (CI) ataupun *t-test*. Informasi tersebut dapat dilihat di @tbl-eda-linear-corr. Tabel korelasi dibangkitkan menggunakan fungsi `correlation()`.
+
+```{r}
+#| echo: false
+#| column: page
+#| classes: small
+#| label: tbl-eda-linear-corr
+#| tbl-cap: "Tabel korelasi setiap variabel di dataset `concrete_train_clean_age`"
+
+corr_train_clean_age <- correlation(concrete_train_clean_age)
+corr_train_clean_age |> mutate_if(is.double, round, digits = 4) |> arrange(desc(r)) |> 
+  select(-CI, -df_error, -Method, -n_Obs) -> corr_train_clage_all
+corr_train_clage_all
+```
+
+Tabel @tbl-eda-linear-corr menyajikan hubungan antara variabel seluruhnya, akan tetapi yang ingin kita tinjau lebih lanjut adalah hubungan antara *target* yaitu `strength`. Berikut informasi yang serupa tapi hanya fokus pada `strength` sebagai `Parameter2` di @tbl-eda-linear-corr-strength.
+
+```{r}
+#| echo: false
+#| label: tbl-eda-linear-corr-strength
+#| classes: small
+#| tbl-cap: "Tabel korelasi terhadap `strength`"
+
+corr_train_clage_all |> 
+  filter(Parameter2 == "strength") |> knitr::kable()
+```
+
+Dari @tbl-eda-linear-corr-strength diatas, didapatkan informasi sebagai berikut:
+
+-   Variabel `cement` memiliki korelasi positif tertinggi dibandingkan variabel lainnya.
+-   Meskipun `water` memiliki korelasi negatif terbesar, perbandingan dengan variabel sebelumnya masih tergolong sedikit.
+-   Terlepas nilai korelasinya, besarnya *p-value* seluruh variabel dibawah *significance level* ($\alpha=0.05$), sehingga bisa dibilang variabel dapat dianggap sebagai signifikan terhadap hubungan linearnya.
+
+Sama halnya dengan @fig-eda-viz-scatter-train, divisualisasikan ulang dengan informasi *correlation test* di @fig-eda-linear-corr.
+
+```{r}
+#| echo: false
+
+myplot_corrplot <- function(data, column) {
+  data |>
+    cor_test(column, "strength") |> 
+    plot() +
+    theme_bw()
+}
+  
+# concrete_train_clean_age_factored |> myplot_corrplot("cement")
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| layout-ncol: 4
+#| label: fig-eda-linear-corr
+#| fig-cap: "Korelasi _features_ dengan `strength`"
+#| fig-subcap: 
+#|   - "Hubungan dengan `cement`"
+#|   - "Hubungan dengan `slag`"
+#|   - "Hubungan dengan `flyash`"
+#|   - "Hubungan dengan `water`"
+#|   - "Hubungan dengan `super_plast`"
+#|   - "Hubungan dengan `coarse_agg`"
+#|   - "Hubungan dengan `fine_agg`"
+
+concrete_train_clean_age_factored |> myplot_corrplot("cement")
+concrete_train_clean_age_factored |> myplot_corrplot("slag")
+concrete_train_clean_age_factored |> myplot_corrplot("flyash")
+concrete_train_clean_age_factored |> myplot_corrplot("water")
+concrete_train_clean_age_factored |> myplot_corrplot("super_plast")
+concrete_train_clean_age_factored |> myplot_corrplot("coarse_agg")
+concrete_train_clean_age_factored |> myplot_corrplot("fine_agg")
+
+```
+
+Setelah melakukan korelasi atau hubungan linear, dapat dilanjutkan ke pemodelan baik regresi linear ataupun model lainnya. Sebelum itu, dataset bisa ditransformasikan terlebih dahulu untuk mempersiapkan dataset sebelum pemodelan. Meski, saat pemodelan akan muncul ide baru untuk memperoleh kriteria prediksi yang akurat.
+
+## Transformasi {#sec-eda-transform}
+
+Dari panjangnya narasi yang telah dibuat mengenai dataset, selalu disinggung mengenai perlakuan variabel umur beton `age`. Sejauh ini, variabel tersebut diperlakukan sebagai kategorikal, tapi bagaimana jika diperlakukan sebagai numerik yang kontinu. Sehingga, saat pemodelan bisa diprediksikan ketika menggunakan *input* umur beton yang tidak tercatat di dataset *training*. Berikut percobaan mentransformasikan umur beton menggunakan `log()` dan `sqrt()` yang dapat dilihat hasilnya di @fig-eda-transform-age.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 3
+#| label: fig-eda-transform-age
+#| fig-cap: "Hubungan `age` vs. `strength` sebelum dan setelah transformasi"
+#| fig-subcap: 
+#|   - "Sebelum transformasi"
+#|   - "Setelah transformasi `log()`"
+#|   - "Setelah transformasi `sqrt()`"
+
+concrete_train_clean_age_log <- concrete_train_clean_age |> 
+  mutate(age_log = log(age), age_sqrt = sqrt(age))
+
+concrete_train_clean_age_log |> 
+  cor_test("age", "strength") |> 
+  plot() + theme_bw()
+
+concrete_train_clean_age_log |> 
+  cor_test("age_log", "strength") |> 
+  plot() + theme_bw()
+
+concrete_train_clean_age_log |> 
+  cor_test("age_sqrt", "strength") |> 
+  plot() + theme_bw()
+```
+
+Dari @fig-eda-transform-age diatas, dapat dilihat secara visual pengaruh penggunaan fungsi `log()` memiliki hasil yang baik dibandingkan `sqrt()`. Tujuan transformasi ini menyamaratakan atau membuat bidang baru sehingga nilai umur beton dari setiap pengujiannya memiliki jarak yang sama, sehingga saat pemodelan, model akan lebih sensitif terhadap umur beton. Dapat dilihat juga pada @fig-eda-transform-age-3, transformasi `sqrt()` juga dapat mencapai tujuan tersebut, akan tetapi penggunaan `log()` jauh lebih baik. Selain itu, di @fig-eda-transform-age terdapat informasi statistik korelasinya. Yang jika dilihat korelasi terbaik diperoleh menggunakan transformasi `log()`. Jika kita melakukan visualiasasi seperti di @fig-eda-linear-corr dan melibatkan variabel umur beton, diperoleh kelengkapan hubungan seluruh *independent variable* dengan *dependent varible* di @fig-eda-transform-corr.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| layout-ncol: 4
+#| label: fig-eda-transform-corr
+#| fig-cap: "Korelasi _features_ dengan `strength`"
+#| fig-subcap: 
+#|   - "Hubungan dengan `cement`"
+#|   - "Hubungan dengan `slag`"
+#|   - "Hubungan dengan `flyash`"
+#|   - "Hubungan dengan `water`"
+#|   - "Hubungan dengan `super_plast`"
+#|   - "Hubungan dengan `coarse_agg`"
+#|   - "Hubungan dengan `fine_agg`"
+#|   - "Hubungan dengan `age`"
+
+concrete_train_clean_age_log |> myplot_corrplot("cement")
+concrete_train_clean_age_log |> myplot_corrplot("slag")
+concrete_train_clean_age_log |> myplot_corrplot("flyash")
+concrete_train_clean_age_log |> myplot_corrplot("water")
+concrete_train_clean_age_log |> myplot_corrplot("super_plast")
+concrete_train_clean_age_log |> myplot_corrplot("coarse_agg")
+concrete_train_clean_age_log |> myplot_corrplot("fine_agg")
+concrete_train_clean_age_log |> myplot_corrplot("age_log")
+
+```
+
+Transformasi lebih lanjutnya akan disesuaikan berdasarkan model yang akan digunakan, dan digunakan berbagai jenis dataset yang akan dijadikan sebagai input model (variasi input data untuk setiap model).
+
+## Rekapitulasi {#sec-eda-recap}
+
+Setelah mengeksplorasi dataset `concrete_train` dan `concrete_test` pada akhirnya diambil beberapa tindakan dan informasi sebagai berikut:
+
+-   Pada @sec-eda-outliers *Outliers*, umur beton dari `concrete_train` yang tidak tersedia di `concrete_test` dihapus observasinya. **Meskipun**, keputusan tersebut bisa saja tidak begitu signifikan terhadap nanti pemodelan. Sehingga akan dipersiapkan dataset yang menyertakan umur beton tersebut atau tidak.
+-   Selain itu, dataset yang diduga sebagai *outlier* menggunakan *box plot*, tidak dilakukan tindakan sama sekali. Karena observasi tersebut dianggap sebagai observasi yang valid dan relevan di dataset dan bukan hasil kekeliruan.
+-   Pada @sec-eda-transform Transformasi, variabel umur beton `age` dipilih transformasi `log()` untuk memudahkan model untuk mengenali perbedaan antara umur beton yang berdekatan.
+
+Sebelum memasuki pemodelan akan dipersiapkan turunan dari objek `concrete_train` dan `concrete_test` untuk memudahkan saat pengelolaan kodenya maupun bereksperimen di saat pemodelan. Dan disimpan sebagai objek `dfsource_*` (untuk membedakan dengan objek `data_[train/val/test]_*`) dan `dfeval_*` (evaluasi / `concrete_test`). Objek `*_trimmed_*` diartikan objek yang telah menghapus umur beton `r ages_not_in_test |> myfunc.code_wrapper()` hari.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: screen-inset
+#| classes: small
+#| code-summary: Pembuatan objek `dfsource` dan `dfeval`
+#| layout-ncol: 2
+#| label: tbl-eda-all-data
+#| tbl-cap: "_Sample_ Dataset hasil _Exploratory Data Analysis_"
+#| tbl-subcap: 
+#|   - "Data `dfsource_original`"
+#|   - "Data `dfsource_original_log`"
+#|   - "Data `dfsource_trimmed`"
+#|   - "Data `dfsource_trimmed_log`"
+#|   - "Data `dfeval_original`"
+#|   - "Data `dfeval_original_log`"
+
+dfsource_original <- concrete_train
+dfsource_original_log <- dfsource_original |> 
+  mutate(age = log(age))
+
+dfsource_trimmed <- concrete_train_clean_age
+dfsource_trimmed_log <- dfsource_trimmed |> 
+  mutate(age = log(age))
+
+dfeval_original <- concrete_test
+dfeval_original_log <- dfeval_original |> 
+  mutate(age = log(age))
+
+set.seed(41608481)
+sample_eda_index <- sample(nrow(dfeval_original), 20) |> as.integer()
+
+dfsource_original |> slice(sample_eda_index)
+dfsource_original_log |> slice(sample_eda_index)
+dfsource_trimmed |> slice(sample_eda_index)
+dfsource_trimmed_log |> slice(sample_eda_index)
+dfeval_original |> slice(sample_eda_index)
+dfeval_original_log |> slice(sample_eda_index)
+
+```
+
+Dan berikut *summary* dari dataset diatas di @tbl-eda-final-summary.
+
+```{r}
+#| echo: false
+#| column: screen-inset-shaded
+#| label: tbl-eda-final-summary
+#| tbl-cap: "Tabel _Summary_"
+#| tbl-subcap: 
+#|   - "_Summary_ numerik `dfsource_original`"
+#|   - "_Summary_ numerik `dfsource_trimmed`"
+#|   - "_Summary_ numerik `dfeval_original`"
+#|   - "_Summary_ numerik `dfsource_original_log`"
+#|   - "_Summary_ numerik `dfsource_trimmed_log`"
+#|   - "_Summary_ numerik `dfeval_original_log`"
+#|   - "Frekuensi `age` `dfsource_original`"
+#|   - "Frekuensi `age` `dfsource_trimmed`"
+#|   - "Frekuensi `age` `dfeval_original`"
+#| collapse: false
+#| layout-ncol: 3
+#| classes: small
+
+eda_descr_numeric <- function(data) {
+  data |> 
+    summarytools::descr(
+      transpose = TRUE, headings = FALSE,
+      stats = c("min", "q1", "med", "mean", "q3", "max"),
+      order = "p"
+    ) |> round(2) |> knitr::kable()
+}
+
+eda_freq_age <- function(data) {
+  data |> mutate(
+    age = factor(age, levels = levels(concrete_train_factored_age$age))
+  ) |> 
+    pull(age) |> 
+    summarytools::freq(heading = FALSE) |> round(2) |> 
+    knitr::kable()
+}
+
+dfsource_original |> select(-id) |> eda_descr_numeric()
+dfsource_trimmed |> select(-id) |> eda_descr_numeric()
+dfeval_original |> select(-id) |> eda_descr_numeric()
+dfsource_original_log |> select(-id) |> eda_descr_numeric()
+dfsource_trimmed_log |> select(-id) |> eda_descr_numeric()
+dfeval_original_log |> select(-id) |> eda_descr_numeric()
+dfsource_original |> eda_freq_age()
+dfsource_trimmed |> eda_freq_age()
+dfeval_original |> eda_freq_age()
+
+```
+
+Analisis data eksploratif diakhiri di bagian ini, yang akan dilanjutkan ke bagian @sec-model Pemodelan.
+
+# Pemodelan {#sec-model}
+
+Pemodelan *machine learning* yang akan dicoba diterapkan antara lain *regresi linear*, *random forest*, dan *artificial neural networks*. Perlu dicatat bahwa untuk pemodelan ini akan lebih fokus ke tujuan utama lembar kerja ini yaitu memprediksikan kuat tekan beton dari variabel yang tersedia. Sehingga, apakah pemodelan sesuai dengan asumsi model (semisal untuk regresi linear harus memenuhi kriteria tertentu) tidak akan disinggung sama sekali.
+
+Pada @sec-model Pemodelan, berikut beberapa langkah yang akan dilakukan:
+
+1.  @sec-model-crossval Cross-Validation: Membagi dataset menjadi *training* dan *validation*.
+2.  @sec-model-input Input model: Mempersiapkan input model seperti transformasi, normalisasi ataupun standarisasi.
+3.  @sec-model-implementation Implementasi model: Implementasi berbagai model.
+4.  @sec-model-compare Komparasi model: Membandingkan performa antar model.
+5.  @sec-model-evaluation Evaluasi model: Evaluasi akhir dari model yang terbaik.
+
+## *Cross-Validation* {#sec-model-crossval}
+
+Pada bagian ini akan membagi dataset menjadi tiga bagian yaitu *training*, *validation*, dan *testing*. Untuk data *training* dan *validation* diperoleh dari `dfsource` sedangkan *testing* diperoleh dari `dfeval`. Setiap objek data input akan dinamai dengan `data_train*_*`, `data_val*_*`, dan `data_test*_*`. Karena di lembar kerja sudah tersedia pemisahan antara *training* dan *testing* maka tidak perlu dilakukan `initial_split()`.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: body-outset
+#| code-summary: Objek `data_test_*`
+
+# testing
+data_test_original <- dfeval_original
+data_test_log <- dfeval_original_log
+```
+
+Untuk pemisahan data *training* dan *validation* akan dicoba untuk menggunakan proporsi yang berbeda (`*1` ($80\%$) dengan `*2` ($75\%$)). Penerapan pembagian itu diterapkan di dataset `dfsource_original`, `dfsource_original_log`, `dfsource_trimmed`, dan `dfsource_trimmed_log`.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: body-outset
+#| code-summary: Objek `data_train*_*` dan `data_val*_*`
+
+set.seed(41608481)
+split1_original <- dfsource_original |> validation_split(prop = 0.8)
+split2_original <- dfsource_original |> validation_split(prop = 0.75)
+
+data_train1_original <- split1_original |> get_rsplit(1) |> training()
+data_train2_original <- split2_original |> get_rsplit(1) |> training()
+data_val1_original <- split1_original |> get_rsplit(1) |> testing()
+data_val2_original <- split2_original |> get_rsplit(1) |> testing()
+
+index_train1 <- data_train1_original |> rownames() |> as.integer()
+index_train2 <- data_train2_original |> rownames() |> as.integer()
+index_val1 <- data_val1_original |> rownames() |> as.integer()
+index_val2 <- data_val2_original |> rownames() |> as.integer()
+
+data_train1_log <- dfsource_original_log |> slice(index_train1)
+data_train2_log <- dfsource_original_log |> slice(index_train2)
+data_val1_log <- dfsource_original_log |> slice(index_val1)
+data_val2_log <- dfsource_original_log |> slice(index_val2)
+```
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: body-outset
+#| code-summary: Objek `data_train*_trimmed_*` dan `data_val*_trimmed_*`
+
+set.seed(41608481)
+split1_trimmed <- dfsource_trimmed |> validation_split(prop = 0.8)
+split2_trimmed <- dfsource_trimmed |> validation_split(prop = 0.75)
+
+data_train1_trimmed <- split1_trimmed |> get_rsplit(1) |> training()
+data_train2_trimmed <- split2_trimmed |> get_rsplit(1) |> training()
+data_val1_trimmed <- split1_trimmed |> get_rsplit(1) |> testing()
+data_val2_trimmed <- split2_trimmed |> get_rsplit(1) |> testing()
+
+index_train1_trimmed <- data_train1_trimmed |> rownames() |> as.integer()
+index_train2_trimmed <- data_train2_trimmed |> rownames() |> as.integer()
+index_val1_trimmed <- data_val1_trimmed |> rownames() |> as.integer()
+index_val2_trimmed <- data_val2_trimmed |> rownames() |> as.integer()
+
+data_train1_trimmed_log <- dfsource_trimmed_log |> slice(index_train1_trimmed)
+data_train2_trimmed_log <- dfsource_trimmed_log |> slice(index_train2_trimmed)
+data_val1_trimmed_log <- dfsource_trimmed_log |> slice(index_val1_trimmed)
+data_val2_trimmed_log <- dfsource_trimmed_log |> slice(index_val2_trimmed)
+```
+
+Setelah memperoleh bagian data *training* dan *validation*. Normalisasi/standarisasi yang dilakukan pada data *training* akan diterapkan di data *validation* nantinya. Proses tersebut akan dilakukan di @sec-model-input Input model. Sebelumnya, dieksplorasi terlebih dahulu antara data *training* dan *validation*. Eksplorasi ini tidak jauh berbeda yang telah dilakukan di @sec-eda Analisis data eksploratif.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| layout-ncol: 8
+#| label: fig-model-compare-corr
+#| fig-cap: "Grafik _scatter plot_ antara data _training_ dan _validation_"
+#| fig-subcap: 
+#|   - "`cement` (_training_)"
+#|   - "`cement` (_validation_)"
+#|   - "`slag` (_training_)"
+#|   - "`slag` (_validation_)"
+#|   - "`flyash` (_training_)"
+#|   - "`flyash` (_validation_)"
+#|   - "`water` (_training_)"
+#|   - "`water` (_validation_)"
+#|   - "`super_plast` (_training_)"
+#|   - "`super_plast` (_validation_)"
+#|   - "`coarse_agg` (_training_)"
+#|   - "`coarse_agg` (_validation_)"
+#|   - "`fine_agg` (_training_)"
+#|   - "`fine_agg` (_validation_)"
+#|   - "`age`* (_training_)"
+#|   - "`age`* (_validation_)"
+
+data_train1_original |> myplot_corrplot("cement")
+data_val1_original   |> myplot_corrplot("cement")
+data_train1_original |> myplot_corrplot("slag")
+data_val1_original   |> myplot_corrplot("slag")
+data_train1_original |> myplot_corrplot("flyash")
+data_val1_original   |> myplot_corrplot("flyash")
+data_train1_original |> myplot_corrplot("water")
+data_val1_original   |> myplot_corrplot("water")
+data_train1_original |> myplot_corrplot("super_plast")
+data_val1_original   |> myplot_corrplot("super_plast")
+data_train1_original |> myplot_corrplot("coarse_agg")
+data_val1_original   |> myplot_corrplot("coarse_agg")
+data_train1_original |> myplot_corrplot("fine_agg")
+data_val1_original   |> myplot_corrplot("fine_agg")
+data_train1_log      |> myplot_corrplot("age")
+data_val1_log        |> myplot_corrplot("age")
+
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| layout-ncol: 9
+#| label: fig-model-compare-density
+#| fig-cap: "Grafik _density plot_ antara data _training_ dan _testing_"
+#| fig-subcap: 
+#|   - "`cement` (_training_)"
+#|   - "`cement` (_testing_)"
+#|   - "`slag` (_training_)"
+#|   - "`slag` (_testing_)"
+#|   - "`flyash` (_training_)"
+#|   - "`flyash` (_testing_)"
+#|   - "`water` (_training_)"
+#|   - "`water` (_testing_)"
+#|   - "`super_plast` (_training_)"
+#|   - "`super_plast` (_testing_)"
+#|   - "`coarse_agg` (_training_)"
+#|   - "`coarse_agg` (_testing_)"
+#|   - "`fine_agg` (_training_)"
+#|   - "`fine_agg` (_testing_)"
+#|   - "`age`* (_training_)"
+#|   - "`age`* (_testing_)"
+#|   - "`strength`* (_training_)"
+#|   - "`strength`* (_testing_)"
+
+data_train1_original |> myplot_density("cement")
+data_val1_original   |> myplot_density("cement")
+data_train1_original |> myplot_density("slag")
+data_val1_original   |> myplot_density("slag")
+data_train1_original |> myplot_density("flyash")
+data_val1_original   |> myplot_density("flyash")
+data_train1_original |> myplot_density("water")
+data_val1_original   |> myplot_density("water")
+data_train1_original |> myplot_density("super_plast")
+data_val1_original   |> myplot_density("super_plast")
+data_train1_original |> myplot_density("coarse_agg")
+data_val1_original   |> myplot_density("coarse_agg")
+data_train1_original |> myplot_density("fine_agg")
+data_val1_original   |> myplot_density("fine_agg")
+data_train1_log      |> myplot_density("age")
+data_val1_log        |> myplot_density("age")
+data_train1_log      |> myplot_density("strength")
+data_val1_log        |> myplot_density("strength")
+
+```
+
+Dari @fig-model-compare-corr dan @fig-model-compare-density, perbedaan antara data *training* dan *validation* tidak jauh berbeda secara sekilas. Sebagai catatan, grafik variabel `age` menggunakan yang telah ditransformasi `log()`. Berikut *summary* data *training* dan *validation* di @tbl-model-compare-summary.
+
+```{r}
+#| echo: false
+#| column: page
+#| label: tbl-model-compare-summary
+#| tbl-cap: "Tabel _Summary_ data _training_ dan _validation_"
+#| tbl-subcap: 
+#|   - "_Summary_ data _training_"
+#|   - "_Summary_ data _validation_"
+#| collapse: false
+#| layout-ncol: 2
+#| classes: small
+
+eda_descr_numeric <- function(data) {
+  data |> 
+    summarytools::descr(
+      transpose = TRUE, headings = FALSE,
+      stats = c("min", "q1", "med", "mean", "q3", "max"),
+      order = "p"
+    ) |> round(2) |> knitr::kable()
+}
+
+data_train1_log |> select(-id) |> eda_descr_numeric()
+data_val1_log  |> select(-id) |> eda_descr_numeric()
+```
+
+Setelah membuat dua jenis, ternyata data `*_trimmed` tidak akan digunakan sama sekali karena jika menganggap umur beton sebagai variabel numerik dan kontinu, umur beton yang tidak tersedia di data *validation* bisa di interpolasi dari dataset *training*-nya. Sehingga, untuk seterusnya hanya akan digunakan data `original` yang belum ditransformasi ataupun sudah (variabel `age` saja).
+
+## Input model {#sec-model-input}
+
+Untuk mengurangi kesulitan mengikuti kode, akan disederhanakan lagi mengenai pembagian yang dilakukan pada @sec-model-crossval *Cross-validation*. Untuk dataset input hanya ada dua objek yaitu `train0` dan `val0`. Dan untuk yang telah dinormalisasi akan diberi nama `train1` dan `val1`. Jika akan dibuat modifikasi lainnya, akan diberi nama `train2`, `val2`, `train3`, `val3`, dst.
+
+```{r}
+#| echo: true
+#| column: body-outset
+#| code-summary: Objek _training_ dan _validation_
+
+train0 <- data_train1_log
+val0 <- data_val1_log
+test0 <- data_test_log
+```
+
+Digunakan data yang variabel `age` telah ditransformasi terkait informasi yang diperoleh saat @sec-eda Analisis data eksploratif.
+
+### Normalisasi / Standarisasi {#sec-model-normalization}
+
+Melihat distribusi data *training* dan *validation* beserta statistiknya di @fig-model-compare-density dan @tbl-model-compare-summary. Berikut beberapa yang dilakukan terhadap data yang digunakan untuk model.
+
+-   Variabel `slag`, `flyash`, dan `super_plast` memiliki nilai $0$ yang dominan. Untuk menghindari perubahan distribusi tersebut, dilakukan *Min Max Scaling*. Nilai $0$ ini merupakan informasi signifikan yang tidak bisa diabaikan oleh karena itu, penggunaan *min max scaling* diharapkan mampu mempertahankan informasi tersebut saat pemodelan.
+-   Variabel `cement`, `water`, `coarse_agg`, dan `fine_agg` hampir mendekati dengan distribusi normal (meski kenyataannya kurtosis dan *skewness*-nya bisa tidak sesuai dengan karakterstik distribusi normal), sehingga untuk variabel tersebut bisa diterapkan standarisasi.
+-   Untuk variabel `age` yang telah ditransformasikan dengan `log()` akan tetap menggunakan hasil transformasinya.
+-   Variabel `strength` sebagai *target* juga akan di normalisasi, tapi sebagai set input yang berbeda karena harapannya, hanya *features* saja yang diubah. Kebutuhan ini akan disesuaikan dengan modelnya. Dan digunakan *min max scaling* untuk dapet dilakukan *inverse transform*.
+-   Untuk eksperimen lainnya (jika sempat), akan dilakukan transformasi PCA untuk variabel yang memiliki proses *scaling* yang berbeda (kecuali `age` yang diabaikan).
+
+Prapemrosesan input data diatas akan dibuat bervariasi sehingga dapat juga dianalisis perbedaan ketika menggunakan input data yang memiliki prapemrosesan berbeda-beda. Prapemrosesan data akan menggunakan fungsi `preProcess()`.
+
+```{r}
+#| echo: true
+#| column: body-outset
+#| message: false
+#| warning: false
+#| code-summary: "Prapemrosesan input data untuk `train1`, `val1`, `test1`"
+
+minmax_scaler <- preProcess(train0 |> select(slag, flyash, super_plast), method = c("range"))
+standard_scaler <- preProcess(train0 |> select(cement, water, coarse_agg, fine_agg), method = c("center", "scale"))
+
+train1 <- train0 |> 
+  predict(minmax_scaler, newdata = _) |> 
+  predict(standard_scaler, newdata = _)
+
+val1 <- val0 |>
+  predict(minmax_scaler, newdata = _) |> 
+  predict(standard_scaler, newdata = _)
+
+test1 <- test0 |>
+  predict(minmax_scaler, newdata = _) |> 
+  predict(standard_scaler, newdata = _)
+
+```
+
+Objek `train1`, `val1`, dan `test1` merupakan objek yang seluruh kolom kecuali `age` dan `strength` yang normalisasi/standarisasi. Sebagai catatan, perubahan ini tidak akan mengubah korelasi data sama sekali karena proses ini tidak memindahkan nilai variabel ke bidang yang baru.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| code-summary: "Prapemrosesan input data untuk `train2`, `val2`, `test2`"
+
+min_train_strength <- min(train1$strength)
+max_train_strength <- max(train1$strength)
+
+strength_minmax <- train1 |> select(strength) |> 
+  preProcess(method = c("range"))
+
+train2 <- strength_minmax |> predict(newdata = train1)
+val2   <- strength_minmax |> predict(newdata = val1)
+test2  <- test1
+```
+
+Objek `train2`, `val2`, dan `test2` merupakan objek yang variabel `strength` sudah dinormalisasikan. Nilai `min_train_strength` dan `max_train_strength` untuk mentransformasikan nilai ke skala original.
+
+Sejauh ini persiapan untuk input data terdapat 3 jenis data yang memiliki prapemrosesan yang berbeda yaitu:
+
+1.  `train0`, `val0`, `test0`: dataset asli yang kolom `age` telah ditransformasik menggunakan `log()`.
+2.  `train1`, `val1`, `test1`: dataset `train0` yang variabel selain `age` disesuaikan dengan normalisasi atau standarisasi.
+3.  `train2`, `val2`, `test2`: dataset `train1` yang *target variable* (`strength`) di normalisasikan dengan *min max scaling*.
+
+Masih terdapat eksperimen yang bisa dilakukan seperti membuat objek baru dengan *potensi outlier* dihilangkan dari data *training*, kemudian mentransformasi seluruh prediktor menggunakan `log()` atau `sqrt()`. Akan tetapi langkah tersebut ketika dari 3 set training diatas tidak memenuhi kriteria model.
+
+## Implementasi pemodelan {#sec-model-implementation}
+
+Pemodelan yang akan dilakukan antara lain regresi linear menggunakan `lm()`, *random forest* menggunakan `randomForest()`, dan *neural networks* menggunakan `keras_model_sequential()`
+
+### Regresi linear {#sec-model-linear}
+
+Dalam pemodelan regresi linear terdapat asumsi yang harus dipenuhi agar dataset dianggap sebagai model linear. Akan tetapi, pengujian tersebut tidak akan dilakukan di lembar kerja ini. Karena fokus utamanya adalah memprediksikan kuat tekan beton yang akurat. Pemodelan menggunakan `lm()`.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| code-summary: "Pemodelan regresi linear `lm()`"
+
+model_lm0 <- lm(strength ~ ., train0 |> select(-id))
+model_lm1 <- lm(strength ~ ., train1 |> select(-id))
+model_lm2 <- lm(strength ~ ., train2 |> select(-id))
+```
+
+```{r}
+#| echo: true
+#| code-summary: "Menampilkan _summary_ model"
+#| column: screen-inset-shaded
+#| layout-ncol: 3
+#| classes: small
+#| class-output: scroll-100
+
+summary(model_lm0)
+summary(model_lm1)
+summary(model_lm2)
+```
+
+Dari ketiga model dengan input dataset yang berbeda, nilai adjusted R-squared tidak berubah sama sekali karena perubahan `train0` ke `train1` atau `train2` dikarenakan tidak ada transformasi yang mengubah distribusi dataset sama sekali. Sehingga, hasil pemodelannya sama saja.
+
+### *Random Forest* {#sec-model-random-forest}
+
+Untuk *random forest* dataset `train*` dan `val*` akan digabungkan karena untuk validasi set dibuat saat training dengan *fold* yang diatur menggunakan `trainControl()` dengan argumen `method = "repeatedcv"`.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| code-summary: "Pemodelan _random forest_"
+
+ctrlconfig <- trainControl(
+  method = "repeatedcv", number = 6, repeats = 4
+)
+
+if (file.exists("model/model_rf0.RDS")) {
+  model_rf0 <- readRDS("model/model_rf0.RDS")
+} else {
+  set.seed(41608481)
+  model_rf0 <- train(strength ~ ., data = rbind(train0, val0) |> select(-id), method = "rf", trControl = ctrlconfig)
+  model_rf0 |> saveRDS("model/model_rf0.RDS")
+}
+
+if (file.exists("model/model_rf1.RDS")) {
+  model_rf1 <- readRDS("model/model_rf1.RDS")
+} else {
+  set.seed(41608481)
+  model_rf1 <- train(strength ~ ., data = rbind(train1, val1) |> select(-id), method = "rf", trControl = ctrlconfig)
+  model_rf1 |> saveRDS("model/model_rf1.RDS")
+}
+
+if (file.exists("model/model_rf2.RDS")) {
+  model_rf2 <- readRDS("model/model_rf2.RDS")
+} else {
+  set.seed(41608481)
+  model_rf2 <- train(strength ~ ., data = rbind(train2, val2) |> select(-id), method = "rf", trControl = ctrlconfig)
+  model_rf2 |> saveRDS("model/model_rf2.RDS")
+}
+```
+
+Berikut informasi *final model* (kiri/atas (`train0`) sampai kanan/bawah (`train2`)).
+
+```{r}
+#| echo: true
+#| code-summary: "Menampilkan _final model_ _Random Forest_"
+#| column: screen-inset-shaded
+#| layout-ncol: 3
+#| classes: small
+#| class-output: scroll-100
+
+model_rf0$finalModel
+model_rf1$finalModel
+model_rf2$finalModel
+```
+
+Dari hasil diatas perubahan prediktor tidak mempengaruhi hasilnya, akan tetapi ketika mentransformasi *target* hasilnya akan berubah.
+
+### *Artificial Neural Networks* {#sec-model-neural-networks}
+
+Untuk pemodelan ANN terdapat perubahan mengenai input data. Pada pemodelan ANN digunakan `recipe()` (meski hanya menghilangkan `id` saja 😅) dan diperlukan prapemrosesan lebih lanjut lagi. Untuk dataset yang digunakan hanya `train0`, `val0`, dan `test0`. Dikarenakan untuk proses normalisasi akan menggunakan `layer_normalization()`. Dan karena pemisahan *training* dan *testing* sudah dilakukan terpisah sejak awal, tidak perlu melakukan `initial_split()`. Akan tetapi untuk validation tetap menggunakan `val0`.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: body-outset
+#| code-summary: "Mempersiapkan input data _features_ dan _target_"
+
+dataset_training <- recipe(strength ~ ., rbind(train0, val0)) |> 
+  step_rm(id) |> 
+  prep() |> 
+  bake(new_data = NULL)
+
+train_features <- dataset_training |> select(-strength)
+train_target <- dataset_training |> select(strength)
+```
+
+Untuk pemodelan ANN, akan dicoba 3 jenis model *Deep Neural Networks* yang memiliki variasi jumlah *hidden layers* beserta *node*-nya. Penamaan dimulai dari angka `3` agar tidak tertukar/bingung dengan model dari jenis set input data sebelumnya (`model_*0` - `model_*2`). Dan perlu dicatat bahwa target variabel tidak ditransformasi sama sekali.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| column: body-outset
+#| code-summary: "Fungsi `build_and_compile_model*`"
+#| classes: small
+
+build_and_compile_model3 <- function(norm) {
+  model <- keras_model_sequential(name = "model3") |> 
+    norm() |> 
+    layer_dense(64, activation = "relu") |> 
+    layer_dense(64, activation = "relu") |> 
+    layer_dense(1)
+  
+  model |> compile(
+    loss = "mean_absolute_error",
+    optimizer = optimizer_adam(0.001),
+    metrics = "mse"
+  )
+  
+  model
+}
+
+build_and_compile_model4 <- function(norm) {
+  model <- keras_model_sequential(name = "model4") |> 
+    norm() |> 
+    layer_dense(64, activation = "relu") |> 
+    layer_dense(32, activation = "relu") |> 
+    layer_dense(16, activation = "relu") |> 
+    layer_dense(1)
+  
+  model |> compile(
+    loss = "mean_absolute_error",
+    optimizer = optimizer_adam(0.001),
+    metrics = "mse"
+  )
+  
+  model
+}
+
+build_and_compile_model5 <- function(norm) {
+  model <- keras_model_sequential(name = "model5") |> 
+    norm() |> 
+    layer_dense(32, activation = "relu") |> 
+    layer_dense(16, activation = "relu") |> 
+    layer_dense(1)
+  
+  model |> compile(
+    loss = "mean_absolute_error",
+    optimizer = optimizer_adam(0.001),
+    metrics = "mse"
+  )
+  
+  model
+}
+```
+
+```{r}
+#| echo: false
+#| output: false
+
+k_clear_session()
+```
+
+```{r}
+#| echo: true
+#| collapse: true
+#| code-summary: "Model NN"
+#| column: body-outset
+#| classes: small
+#| class-output: scroll-100
+
+normalizer <- layer_normalization(axis = -1L)
+normalizer |> adapt(as.matrix(train_features))
+
+model_nn3 <- build_and_compile_model3(normalizer)
+model_nn4 <- build_and_compile_model4(normalizer)
+model_nn5 <- build_and_compile_model5(normalizer)
+
+model_nn3 |> summary()
+model_nn4 |> summary()
+model_nn5 |> summary()
+```
+
+```{r}
+#| echo: true
+#| code-summary: "_Fitting model_"
+#| column: body-outset
+#| collapse: true
+#| classes: small
+
+if (file.exists("model/model_nn3")) {
+  # model_nn3 <- load_model_tf("model/model_nn3")
+  # model_nn3 <- load_model_hdf5("model/model_nn3.h5")
+  model_nn3 |> load_model_weights_hdf5("model/model_nn3_weights.h5")
+  history_nn3 <- readRDS("model/history_nn3.RDS")
+} else {
+  set.seed(41608481)
+  print("FITTING model_nn3")
+  history_nn3 <- model_nn3 |> fit(
+    as.matrix(train_features),
+    as.matrix(train_target),
+    validation_split = 0.2,
+    verbose = 0,
+    epochs = 100
+  )
+  model_nn3 |> save_model_tf("model/model_nn3")
+  model_nn3 |> save_model_weights_tf("model/model_nn3_weights")
+  model_nn3 |> save_model_hdf5("model/model_nn3.h5")
+  model_nn3 |> save_model_weights_hdf5("model/model_nn3_weights.h5")
+  history_nn3 |> saveRDS("model/history_nn3.RDS")
+}
+
+if (file.exists("model/model_nn4")) {
+  # model_nn4 <- load_model_tf("model/model_nn4")
+  # model_nn4 <- load_model_hdf5("model/model_nn4.h5")
+  model_nn4 |> load_model_weights_hdf5("model/model_nn4_weights.h5")
+  history_nn4 <- readRDS("model/history_nn4.RDS")
+} else {
+  set.seed(41608481)
+  print("FITTING model_nn4")
+  history_nn4 <- model_nn4 |> fit(
+    as.matrix(train_features),
+    as.matrix(train_target),
+    validation_split = 0.2,
+    verbose = 0,
+    epochs = 100
+  )
+  model_nn4 |> save_model_tf("model/model_nn4")
+  model_nn4 |> save_model_weights_tf("model/model_nn4_weights")
+  model_nn4 |> save_model_hdf5("model/model_nn4.h5")
+  model_nn4 |> save_model_weights_hdf5("model/model_nn4_weights.h5")
+  history_nn4 |> saveRDS("model/history_nn4.RDS")
+}
+
+if (file.exists("model/model_nn5")) {
+  # model_nn5 <- load_model_tf("model/model_nn5")
+  # model_nn5 <- load_model_hdf5("model/model_nn5.h5")
+  model_nn5 |> load_model_weights_hdf5("model/model_nn5_weights.h5")
+  history_nn5 <- readRDS("model/history_nn5.RDS")
+} else {
+  set.seed(41608481)
+  print("FITTING model_nn5")
+  history_nn5 <- model_nn5 |> fit(
+    as.matrix(train_features),
+    as.matrix(train_target),
+    validation_split = 0.2,
+    verbose = 0,
+    epochs = 100
+  )
+  model_nn5 |> save_model_tf("model/model_nn5")
+  model_nn5 |> save_model_weights_tf("model/model_nn5_weights")
+  model_nn5 |> save_model_hdf5("model/model_nn5.h5")
+  model_nn5 |> save_model_weights_hdf5("model/model_nn5_weights.h5")
+  history_nn5 |> saveRDS("model/history_nn5.RDS")
+}
+
+```
+
+Seluruh model yang telah dibuat akan dibandingkan dan dilihat mengenai performanya berdasarkan dataset *validation* yang sudah dibuat sebelumnya.
+
+## Komparasi model {#sec-model-compare}
+
+Bagian ini akan membandingkan antara hasil model berdasarkan input data yang berbeda dengan perbandingan antara arsitektur yang digunakan.
+
+```{r}
+#| echo: false
+#| output: false
+
+pred_val_lm0 <- predict(model_lm0, val0)
+pred_val_lm1 <- predict(model_lm1, val1)
+pred_val_lm2 <- predict(model_lm2, val2)
+
+pred_val_rf0 <- predict(model_rf0, val0)
+pred_val_rf1 <- predict(model_rf1, val1)
+pred_val_rf2 <- predict(model_rf2, val2)
+
+pred_val_nn3 <- predict(model_nn3, as.matrix(val0 |> select(-id, -strength)))
+pred_val_nn4 <- predict(model_nn4, as.matrix(val0 |> select(-id, -strength)))
+pred_val_nn5 <- predict(model_nn5, as.matrix(val0 |> select(-id, -strength)))
+
+mmae_val_lm0 <- MAE(pred_val_lm0, val0$strength)
+mmae_val_lm1 <- MAE(pred_val_lm1, val1$strength)
+mmae_val_lm2 <- MAE(pred_val_lm2, val2$strength)
+
+mr2_val_lm0 <- R2(pred_val_lm0, val0$strength)
+mr2_val_lm1 <- R2(pred_val_lm1, val1$strength)
+mr2_val_lm2 <- R2(pred_val_lm2, val2$strength)
+
+mmae_val_rf0 <- MAE(pred_val_rf0, val0$strength)
+mmae_val_rf1 <- MAE(pred_val_rf1, val1$strength)
+mmae_val_rf2 <- MAE(pred_val_rf2, val2$strength)
+
+mr2_val_rf0 <- R2(pred_val_rf0, val0$strength)
+mr2_val_rf1 <- R2(pred_val_rf1, val1$strength)
+mr2_val_rf2 <- R2(pred_val_rf2, val2$strength)
+
+mmae_val_nn3 <- MAE(pred_val_nn3, val0$strength)
+mmae_val_nn4 <- MAE(pred_val_nn4, val0$strength)
+mmae_val_nn5 <- MAE(pred_val_nn5, val0$strength)
+
+mr2_val_nn3 <- R2(pred_val_nn3 |> c(), val0$strength)
+mr2_val_nn4 <- R2(pred_val_nn4 |> c(), val0$strength)
+mr2_val_nn5 <- R2(pred_val_nn5 |> c(), val0$strength)
+```
+
+### Regresi Linear {#sec-model-compare-linear}
+
+Pada bagian @sec-model-linear, dilakukan tiga model dengan tiga jenis input data yang berbeda. Perbandingan performa tiap modelnya bisa dilihat di @tbl-model-compare-lm.
+
+```{r}
+#| echo: false
+#| warning: false
+#| column: page
+#| label: tbl-model-compare-lm
+#| tbl-cap: Perbandingan antar model regresi linear
+
+compare_performance(model_lm0, model_lm1, model_lm2) |> knitr::kable()
+```
+
+Dari @tbl-model-compare-lm, diketahui bahwa nilai skor *R2* maupun *Adjusted R2*, sama saja karena perubahan normalisasi maupun standarisasi tidak mempengaruhi di model regresi linear. Seperti yang diketahui sebelumnya, ketika variabel umur beton (`age`) tidak ditransformasikan dengan `log()` hubungan korelasinya dengan kuat tekan beton (`strength`) tidak begitu baik. Meski, bisa dilakukan pemodelan dengan input data yang tanpa transformasi. Bisa diperkirakan bahwa hasil tanpa transformasi akan jauh lebih buruk dibandingkan setelah membuat *independent variable* baru dengan transformasi `log()`.
+
+Nilai estimasi parameternya model linear bisa disajikan dalam grafik yang dapat dilihat di @fig-model-compare-linear menggunakan `plot_summs()`.
+
+```{r}
+#| echo: false
+#| column: body
+#| label: fig-model-compare-linear
+#| fig-cap: "Nilai estimasi parameter setiap variabel di model linear"
+
+plot_summs(model_lm0, model_lm1, model_lm2,
+           model.names = c("model_lm0", "model_lm1", "model_lm2")) + theme_bw()
+```
+
+Dari @fig-model-compare-linear diatas, dapat diperoleh beberapa informasi sebagai berikut:
+
+-   Di `model_lm2`, estimasi parameter setiap variabel mendekati $0$, dikarenakan pada `model_lm2` menggunakan set data yang variabel *target* di normalisasikan. Sehingga nilai yang dihasilkan pun estimasinya sangat kecil.
+-   Di `model_lm0`, terlihat hanya variabel `age` yang memiliki estimasi parameter yang terbesar. Bisa diasumsikan bahwa, paramter tersebut yang memiliki pengaruh lebih besar dibandingkan model lainnya. Tapi hal tersebut bisa juga keliru karena variabel `age` yang digunakan telah ditransformasi.
+-   Pada `model_lm1` dimana variabel *target* yang tidak ditransformasi, estimasinya bernilai besar karena untuk mengkompensasi perubahan yang perlu dilakukan dari variabel *prediktor* menjadi nilai yang berskala sama dengan *target*.
+
+Sebagai catatan juga, bahwa nilai estimasi tersebut merupakan nilai yang disajikan ketika menggunakan fungsi `summary()` di objek model linear. Berikut visualisasi R2 tiap model menggunakan data *validation*-nya di @fig-model-compare-lm-r2.
+
+```{r}
+#| echo: false
+#| column: page
+#| message: false
+#| label: fig-model-compare-lm-r2
+#| layout-ncol: 3
+#| fig-cap: Grafik R2 setiap model untuk data _validation_
+#| fig-subcap: 
+#|   - "`model_lm0`"
+#|   - "`model_lm1`"
+#|   - "`model_lm2`"
+
+myplot_scatter_lm <- function(model, val, obs, oriage) {
+  predict0 <- predict(model, val)
+  df <- data.frame(
+    prediction = predict0,
+    observation = obs,
+    age = oriage
+  )
+  df |> ggscatter(
+    x = "prediction", y = "observation", color = "age", size = 4,
+    add = "reg.line",
+    add.params = list(color = "blue", fill = "lightgray"),
+    conf.int = TRUE,
+    cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+    # cor.coeff.args = list(method = "pearson", label.sep = "\n"),
+    ggtheme = theme_bw()
+  ) +
+    scale_color_scico_d(palette = "lajolla")
+}
+
+model_lm0 |> myplot_scatter_lm(val0, val0$strength, exp(val0$age) |> factor(levels = levels_age))
+model_lm1 |> myplot_scatter_lm(val1, val1$strength, exp(val1$age) |> factor(levels = levels_age))
+model_lm2 |> myplot_scatter_lm(val2, val2$strength, exp(val2$age) |> factor(levels = levels_age))
+```
+
+Dari @fig-model-compare-lm-r2 tidak ada perbedaan sama sekali dari perbedaan set input data yang saling berbeda, asalkan skala nya tetap sama. Untuk perbandingan selanjutnya digunakan `model_lm0`. Nilai metrik MAE dan R2 dengan data *validation* bisa dilihat di @tbl-model-compare-all-lm.
+
+```{r}
+#| echo: false
+#| column: body
+#| label: tbl-model-compare-all-lm
+#| tbl-cap: Metrik model linear dengan _data validation_
+
+data.frame(
+  model = c("model_lm0", "model_lm1", "model_lm2"),
+  MAE = c(mmae_val_lm0, mmae_val_lm1, mmae_val_lm2),
+  R2 = c(mr2_val_lm0, mr2_val_lm1, mr2_val_lm2)
+) |> knitr::kable()
+
+```
+
+### Random Forest {#sec-model-compare-rf}
+
+Untuk *random forest* juga ditemukan bahwa tidak ada perbedaan antara set input data `*0` dan `*1`, sedangkan saat melakukan transformasi pada *target* (`*2`), ditemukan perbedaan. Karena visualisasinya cukup terbatas, digunakan R2 untuk melihat perbedaan antar model. Visualisasi R2 untuk model *random forest* dengan data *training* dapat dilihat di @fig-model-compare-rf-training.
+
+```{r}
+#| echo: false
+#| column: page
+#| message: false
+#| label: fig-model-compare-rf-training
+#| layout-ncol: 3
+#| fig-cap: Grafik R2 setiap model untuk data _training_
+#| fig-subcap: 
+#|   - "`model_rf0`"
+#|   - "`model_rf1`"
+#|   - "`model_rf2`"
+
+rf0 <- rbind(train0, val0)
+rf1 <- rbind(train1, val1)
+rf2 <- rbind(train2, val2)
+
+model_rf0 |> myplot_scatter_lm(rf0, rf0$strength, rf0$age |> exp() |> factor(levels = levels_age))
+model_rf1 |> myplot_scatter_lm(rf1, rf1$strength, rf1$age |> exp() |> factor(levels = levels_age))
+model_rf2 |> myplot_scatter_lm(rf2, rf2$strength, rf2$age |> exp() |> factor(levels = levels_age))
+```
+
+Sudah jelas untuk data training diperoleh nilai $R2$ yang mendekati $1$. Visualiasi yang serupa untuk data *validation* dapat dilihat di @fig-model-compare-rf-validation.
+
+Pada proses pemodelan *random forest*, data menggunakan validasi sendiri jika digunakan input keseluruhan data *training*. Untuk mengatasi model "curang" mengetahui data *validation*, dilakukan pemodelan ulang. Dibuat model *random forest* baru yang dinamai `model_rf3` dimana data *validation* tidak terlibat saat pemodelan.
+
+```{r}
+#| echo: true
+#| collapse: true
+#| classes: small
+#| column: body-outset
+#| code-summary: "Pemodelan `model_rf3`"
+
+if (file.exists("model/model_rf3.RDS")) {
+  model_rf3 <- readRDS("model/model_rf3.RDS")
+} else {
+  set.seed(41608481)
+  model_rf3 <- train(strength ~ ., data = train0 |> select(-id), method = "rf", trControl = ctrlconfig)
+  model_rf3 |> saveRDS("model/model_rf3.RDS")
+}
+```
+
+```{r}
+#| echo: false
+
+pred_val_rf3 <- predict(model_rf3, val0)
+mmae_val_rf3 <- MAE(pred_val_rf3, val0$strength)
+mr2_val_rf3 <- R2(pred_val_rf3, val0$strength)
+
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| label: fig-model-compare-rf-validation
+#| layout-ncol: 4
+#| fig-cap: Grafik R2 setiap model untuk data _validation_
+#| fig-subcap: 
+#|   - "`model_rf0`"
+#|   - "`model_rf1`"
+#|   - "`model_rf2`"
+#|   - "`model_rf3`"
+
+model_rf0 |> myplot_scatter_lm(val0, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+model_rf1 |> myplot_scatter_lm(val1, val1$strength, val1$age |> exp() |> factor(levels = levels_age))
+model_rf2 |> myplot_scatter_lm(val2, val2$strength, val2$age |> exp() |> factor(levels = levels_age))
+model_rf3 |> myplot_scatter_lm(val0, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+```
+
+Pada @fig-model-compare-rf-validation, model terakhir `model_rf3` tidak mendekati sempurna karena model belum pernah mengenali dataset itu sama sekali, berbeda dengan model lainnya. Di @tbl-model-compare-all-rf, bisa dilihat nilai MAE dan R2 menggunakan data *validation* yang sudah dipisahkan pada tahap prapemrosesan input data.
+
+```{r}
+#| echo: false
+#| column: body
+#| label: tbl-model-compare-all-rf
+#| tbl-cap: Metrik model _random forest_ dengan _data validation_
+
+data.frame(
+  model = c("model_rf0", "model_rf1", "model_rf2", "model_rf3"),
+  MAE = c(mmae_val_rf0, mmae_val_rf1, mmae_val_rf2, mmae_val_rf3),
+  R2 = c(mr2_val_rf0, mr2_val_rf1, mr2_val_rf2, mr2_val_rf3)
+) |> knitr::kable()
+
+```
+
+Jadi untuk model yang akan digunakan untuk pengujian data test adalah `model_rf3`.
+
+### *Artificial Neural Networks* {#sec-model-compare-nn}
+
+Pada ANN, terdapat tiga model yaitu `model_nn3`, `model_nn4`, `model_nn5` dengan perbedaan *hidden layer*. Pemilihan *hidden layer* dan *epoch* dilakukan secara sembarang sehingga pemodelan dengan ANN bisa jadi belum mencapai optimal. Untuk memperoleh *hyper parameter* yang optimal, dapat dilakukan *Grid Search*. Karena keterbatasan waktu, metode tersebut tidak diterapkan, dan jika mengutak-ngatik dengan library `keras` atau `tensorflow`, pribadi, cenderung langsung dilakukan di *python*.
+
+Grafik `loss` vs. `epoch` dapat dilihat pada @fig-model-compare-history-nn. Dan sebagai catatan, *target* variabel tidak ditransformasi sama sekali.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| layout-ncol: 3
+#| label: fig-model-compare-history-nn
+#| fig-cap: Grafik _loss_ setiap epochnya.
+#| fig-subcap: 
+#|   - "`model_nn3`"
+#|   - "`model_nn4`"
+#|   - "`model_nn5`"
+
+plot(history_nn3) + theme_bw()
+plot(history_nn4) + theme_bw()
+plot(history_nn5) + theme_bw()
+```
+
+Sama halnya dengan sebelumnya, grafik R2 digambarkan juga untuk model *neural networks*. Hasilnya dapat dilihat di @fig-model-compare-nn-validation.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| label: fig-model-compare-nn-validation
+#| layout-ncol: 3
+#| fig-cap: Grafik R2 setiap model untuk data _validation_
+#| fig-subcap: 
+#|   - "`model_nn3`"
+#|   - "`model_nn4`"
+#|   - "`model_nn5`"
+
+myplot_scatter_pred <- function(val, obs, oriage) {
+  predict0 <- val
+  df <- data.frame(
+    prediction = predict0,
+    observation = obs,
+    age = oriage
+  )
+  df |> ggscatter(
+    x = "prediction", y = "observation", color = "age", size = 4,
+    add = "reg.line",
+    add.params = list(color = "blue", fill = "lightgray"),
+    conf.int = TRUE,
+    cor.coef = TRUE, # Add correlation coefficient. see ?stat_cor
+    cor.coeff.args = list(method = "pearson", label.sep = "\n"),
+    ggtheme = theme_bw()
+  ) +
+    scale_color_scico_d(palette = "lajolla")
+}
+
+myplot_scatter_pred(pred_val_nn3, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_val_nn4, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_val_nn5, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+```
+
+Hasilnya masih belum cukup memuaskan, terlebih lagi dataset ini ikut serta saat pemodelan. Sehingga, dimungkinkan untuk melakukan *model tuning* untuk memperoleh hasil yang lebih baik. Metrik R2 dan MAE dapat dilihat di @tbl-model-compare-all-nn.
+
+```{r}
+#| echo: false
+#| column: body
+#| label: tbl-model-compare-all-nn
+#| tbl-cap: Metrik model linear dengan _data validation_
+
+data.frame(
+  model = c("model_nn3", "model_nn4", "model_nn5"),
+  MAE = c(mmae_val_nn3, mmae_val_nn4, mmae_val_nn5),
+  R2 = c(mr2_val_nn3, mr2_val_nn4, mr2_val_nn5)
+) |> knitr::kable()
+
+```
+
+Dari @tbl-model-compare-all-nn, diperoleh `model_nn4` yang terbaik dan akan digunakan sebagai perbandingan.
+
+## Evaluasi model {#sec-model-evaluation}
+
+Setelah memperoleh tiga model yang terbaik, akan dibandingkan antar model untuk memilih model mana yang akan digunakan untuk *testing*. Perbandingannya dapat dilihat di @fig-model-evaluation-compare dan @tbl-model-evaluation-compare.
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| label: fig-model-evaluation-compare
+#| layout-ncol: 3
+#| fig-cap: Grafik R2 setiap model untuk data _validation_
+#| fig-subcap: 
+#|   - "`model_lm0`"
+#|   - "`model_rf3`"
+#|   - "`model_nn4`"
+
+myplot_scatter_pred(pred_val_lm0, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_val_rf3, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_val_nn4, val0$strength, val0$age |> exp() |> factor(levels = levels_age))
+```
+
+```{r}
+#| echo: false
+#| column: body
+#| label: tbl-model-evaluation-compare
+#| tbl-cap: Metrik model untuk prediksi _validation_
+
+data.frame(
+  model = c("model_lm0", "model_rf3", "model_nn4"),
+  MAE = c(mmae_val_lm0, mmae_val_rf3, mmae_val_nn4),
+  R2 = c(mr2_val_lm0, mr2_val_rf3, mr2_val_nn4)
+) |> knitr::kable()
+
+```
+
+Dari semua model yang memenuhi kriteria dimana `MAE <= 4` dengan `R2 >= 90%` yaitu model `model_rf3` dan `model_nn4`. Dan `model_rf3` merupakan model yang lebih baik dibandingkan model lainnya.
+
+### Prediksi dataset *testing*
+
+[Dialihkan ke @sec-revision]
+
+# Penutup {#sec-closing}
+
+Berikut kesimpulan/ringkasan dan saran yang bisa disampaikan setelah mengerjakan lembar kerja ini.
+
+## Kesimpulan {#sec-closing-conclusion}
+
+-   Model yang telah dicoba ada tiga yaitu regresi linear, *random forest*, dan *artificial neural networks*. Dengan tiga jenis set input data yang digunakan untuk beberapa model.
+- [REDACTED]
+-   Terlepas pernyataan sebelumnya, model *machine learning* ini bisa membantu pengguna untuk memprediksikan kuat tekan beton berdasarkan komponen dan umur betonnya. Dari model tersebut juga bisa di eksplor lagi lebih lanjut mengenai komponen manakah yang cukup signifikan ketika ingin mencapa kuat tekan beton tertentu.
+-   Pembelajaran ini bisa digunakan untuk memahami hubungan kuat tekan beton dan umur dan komponen campurannya. Akan tetapi sebelum menyentuh *machine learning*, masih bisa dieksplorasi lagi lebih lanjut mengenai dataset ini menggunakan visualisasi maupun uji statistik.
+
+## Saran {#sec-closing-advice}
+
+-   Transformasi dataset bisa dieksperimenkan lebih lanjut lagi untuk memperoleh pemahaman mengenai terapan *machine learning* di kasus prediksi kuat tekan beton.
+-   Model untuk ANN dan *Random Forest* masih bisa dikonfigurasi sedemikian rupa untuk meningkatkan performa model lebih baik.
+
+---
+
+# Revisi {#sec-revision}
+
+Beberapa bagian yang telah dihapus akan dilakukan dibagian @sec-revision. Dan untuk penambahan seperti variasi model lainnya maupun diskusi terkait akan dilakukan di bab ini atau setelahnya.
+
+## Evaluasi Model {#sec-rev-evaluate}
+
+Dari @tbl-model-evaluation-compare, diketahui hanya `model_rf3` saja yang memiliki nilai `MAE <= 4` dengan `R2 >= 90%`. Sedangkan untuk `model_lm0` dan `model_nn4` nilai `R2` tidak mencapai sampai `90%`. Pada bagian revisi ini, akan dilakukan prediksi dengan dataset testing yang pada bagian sebelumnya telah di hilangkan. 
+
+### Prediksi dataset _testing_ {#sec-rev-predict-test}
+
+Prediksi menggunakan data dari `test0` dengan nilai aktualnya diperoleh dari kolom `strength` atau `test0$strength`. Hasil disajikan serupa menggunakan grafik R2 untuk setiap modelnya yang dapat dilihat di @fig-rev-testing-compare. 
+
+```{r}
+#| echo: false
+#| output: false
+
+pred_test_lm0 <- predict(model_lm0, test0)
+pred_test_rf3 <- predict(model_rf3, test0)
+pred_test_nn4 <- predict(model_nn4, as.matrix(test0 |> select(-id, -strength)))
+```
+
+```{r}
+#| echo: false
+#| column: screen-inset
+#| message: false
+#| label: fig-rev-testing-compare
+#| layout-ncol: 3
+#| fig-cap: Grafik R2 setiap model untuk data _test_
+#| fig-subcap: 
+#|   - "`model_lm0`"
+#|   - "`model_rf3`"
+#|   - "`model_nn4`"
+
+myplot_scatter_pred(pred_test_lm0, test0$strength, test0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_test_rf3, test0$strength, test0$age |> exp() |> factor(levels = levels_age))
+myplot_scatter_pred(pred_test_nn4, test0$strength, test0$age |> exp() |> factor(levels = levels_age))
+```
+
+Dari @fig-rev-testing-compare, model terbaik diperoleh oleh model `model_rf3` dan `model_nn4` yang diketahui nilai $R$ sebesar $0.94$ (Untuk memperoleh nilai $R^2$, tinggal dikuadratkan saja). Berikut hasilnya dalam bentuk tabel @tbl-rev-testing-compare. 
+
+```{r}
+#| echo: false
+#| column: body
+#| label: tbl-rev-testing-compare
+#| tbl-cap: Metrik model untuk prediksi _validation_
+
+mmae_test_lm0 <- MAE(pred_test_lm0, test0$strength)
+mmae_test_rf3 <- MAE(pred_test_rf3, test0$strength)
+mmae_test_nn4 <- MAE(pred_test_nn4, test0$strength)
+
+mr2_test_lm0 <- R2(pred_test_lm0, test0$strength)
+mr2_test_rf3 <- R2(pred_test_rf3, test0$strength)
+mr2_test_nn4 <- R2(pred_test_nn4, test0$strength)
+
+data.frame(
+  model = c("model_lm0", "model_rf3", "model_nn4"),
+  MAE = c(mmae_test_lm0, mmae_test_rf3, mmae_test_nn4),
+  R2 = c(mr2_test_lm0, mr2_test_rf3, mr2_test_nn4)
+) |> knitr::kable()
+
+```
+
+Dari @tbl-rev-testing-compare diperoleh bahwa `model_nn4` lah yang memperoleh nilai terbaik dengan nilai $R^2 = `r mr2_test_nn4`$ dan $\text{MAE} = `r mmae_test_nn4`$. Target awal dari capstone tidak tercapai dari semua model yaitu `MAE <= 4` dan `R2 >= 90%`. Sehingga masih dapat dilakukan peningkatan model untuk memperoleh hasil yang ingin dicapai. Saran yang disampaikan di @sec-closing akan diterapkan nantinya.
+
+---
+
+# Changelog {#sec-changelog .unnumbered}
+
+- 2022-12-31
+  - Versi `open-source` dokumen ini dirilis di GitHub [taruma/concrete-prediction](https://github.com/taruma/concrete-prediction). Modelnya juga telah disertakan.
+  - Ditambah bagian @sec-revision untuk melanjutkan lembar kerja ini. 
+- 2022-12-22
+    - Koreksi koding untuk pemodelan _random forest_.
+    - Pada @fig-model-compare-corr, koreksi _testing_ menjadi _validation_.
+-   2022-12-20
+    -   Koreksi penulisan (data *training* yang seharusnya data *validation* pada grafik).
+    -   Menyimpan model ANN dengan berbagai format (HDF5 dan bobotnya).
+    -   Informasi mengenai open source dokumen ini.
+
